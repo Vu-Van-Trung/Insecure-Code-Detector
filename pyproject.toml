@@ -1,0 +1,9 @@
+[project]
+name = "secure-code-analyzer"
+version = "1.0.0"
+description = "Static analysis tool that detects insecure coding patterns in Python source code"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
