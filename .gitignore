@@ -6,6 +6,7 @@ env/
 .pytest_cache/
 .mypy_cache/
 logs/
+.tmp/
 reports/output/
 uploads/
 *.egg-info/

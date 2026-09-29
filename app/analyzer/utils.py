@@ -3,6 +3,22 @@
 from __future__ import annotations
 
 import ast
+import re
+from collections.abc import Iterator
+
+
+# Nodes that open a new variable scope.
+SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+
+def walk_scope(scope: ast.AST) -> Iterator[ast.AST]:
+    """Like ast.walk, but does not descend into nested functions or classes."""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (*SCOPE_NODES, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(node))
 
 
 def collect_imports(tree: ast.AST) -> dict[str, str]:
@@ -104,6 +120,25 @@ def is_static_value(node: ast.AST | None) -> bool:
     if isinstance(node, (ast.List, ast.Tuple)):
         return all(is_static_value(element) for element in node.elts)
     return False
+
+
+def split_identifier(name: str) -> list[str]:
+    """Split an identifier into lowercase words.
+
+    ``API_KEY`` -> ["api", "key"], ``apiKey`` -> ["api", "key"],
+    ``dbPassword2`` -> ["db", "password"].
+    """
+    words = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+", name)
+    return [word.lower() for word in words]
+
+
+def string_parts(node: ast.AST) -> list[str]:
+    """Literal string fragments of a string expression (concat, f-string, %, format)."""
+    parts: list[str] = []
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            parts.append(child.value)
+    return parts
 
 
 def get_argument(call: ast.Call, position: int, keyword: str | None = None) -> ast.AST | None:

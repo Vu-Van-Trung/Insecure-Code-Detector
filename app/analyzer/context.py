@@ -6,7 +6,8 @@ import ast
 from dataclasses import dataclass, field
 
 from app.analyzer.parser import ParsedSource
-from app.analyzer.utils import collect_imports, resolve_name
+from app.analyzer.taint import TaintConfig, TaintResult, analyze_taint
+from app.analyzer.utils import SCOPE_NODES, collect_imports, resolve_name, walk_scope
 
 
 @dataclass
@@ -23,9 +24,11 @@ class AnalysisContext:
     parents: dict[ast.AST, ast.AST] = field(default_factory=dict)
     # Names the file itself defines (functions, classes, assigned variables).
     local_names: set[str] = field(default_factory=set)
+    # Labels (tainted / static / unknown) of every expression; see taint.py.
+    taint: TaintResult = field(default_factory=TaintResult)
 
     @classmethod
-    def from_parsed(cls, parsed: ParsedSource) -> AnalysisContext:
+    def from_parsed(cls, parsed: ParsedSource, taint_config: TaintConfig | None = None) -> AnalysisContext:
         parents: dict[ast.AST, ast.AST] = {}
         local_names: set[str] = set()
         for node in ast.walk(parsed.tree):
@@ -35,13 +38,16 @@ class AnalysisContext:
                 local_names.add(node.name)
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 local_names.add(node.id)
+        imports = collect_imports(parsed.tree)
+        taint = analyze_taint(parsed.tree, imports, taint_config) if taint_config else TaintResult()
         return cls(
             filename=parsed.filename,
             source_lines=parsed.lines,
             tree=parsed.tree,
-            imports=collect_imports(parsed.tree),
+            imports=imports,
             parents=parents,
             local_names=local_names,
+            taint=taint,
         )
 
     def get_line(self, lineno: int) -> str:
@@ -60,6 +66,39 @@ class AnalysisContext:
 
     def parent(self, node: ast.AST) -> ast.AST | None:
         return self.parents.get(node)
+
+    def enclosing_scope(self, node: ast.AST) -> ast.AST:
+        """Nearest enclosing function (or lambda); the module at top level."""
+        current = self.parents.get(node)
+        while current is not None:
+            if isinstance(current, SCOPE_NODES):
+                return current
+            current = self.parents.get(current)
+        return self.tree
+
+    def enclosing_function_name(self, node: ast.AST) -> str | None:
+        scope = self.enclosing_scope(node)
+        return scope.name if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+
+    def assignments_before(self, name: str, node: ast.AST) -> list[ast.stmt]:
+        """Assignments to variable ``name`` in the same scope, before ``node``.
+
+        Covers ``x = ...``, ``x: T = ...`` and ``x += ...``, sorted by line.
+        This is a flow-insensitive approximation: branches (if/else) and loops
+        are not distinguished, which is acceptable for a prototype.
+        """
+        line = getattr(node, "lineno", 0)
+        found: list[ast.stmt] = []
+        for stmt in walk_scope(self.enclosing_scope(node)):
+            if getattr(stmt, "lineno", line) >= line:
+                continue
+            if isinstance(stmt, ast.Assign):
+                if any(isinstance(t, ast.Name) and t.id == name for t in stmt.targets):
+                    found.append(stmt)
+            elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):
+                if isinstance(stmt.target, ast.Name) and stmt.target.id == name and stmt.value is not None:
+                    found.append(stmt)
+        return sorted(found, key=lambda stmt: stmt.lineno)
 
     def is_shadowed_builtin(self, name: str) -> bool:
         """True if a builtin such as ``eval`` is redefined by the file itself.

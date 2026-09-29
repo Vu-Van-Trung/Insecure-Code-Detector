@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.analyzer.context import AnalysisContext
 from app.analyzer.parser import DEFAULT_MAX_FILE_SIZE, ParsedSource, SourceError, parse_file, parse_source
+from app.analyzer.taint import TaintConfig
 from app.analyzer.visitor import SecurityVisitor
 from app.models.finding import Finding, ScanError, ScanResult
 from app.rules.base import SecurityRule
@@ -36,10 +37,13 @@ class AnalyzerEngine:
         registry: RuleRegistry | None = None,
         disabled_rules: set[str] | None = None,
         max_file_size: int = DEFAULT_MAX_FILE_SIZE,
+        taint_config: TaintConfig | None = None,
     ) -> None:
+        """Raises ConfigError if the default taint configuration is invalid."""
         self.registry = registry if registry is not None else load_builtin_rules()
         self.rules: list[SecurityRule] = self.registry.create_rules(disabled_rules or set())
         self.max_file_size = max_file_size
+        self.taint_config = taint_config if taint_config is not None else TaintConfig.load()
 
     # ------------------------------------------------------------------ public API
 
@@ -81,7 +85,7 @@ class AnalyzerEngine:
 
     def analyze(self, parsed: ParsedSource) -> list[Finding]:
         """Run all enabled rules on an already parsed source."""
-        context = AnalysisContext.from_parsed(parsed)
+        context = AnalysisContext.from_parsed(parsed, self.taint_config)
         visitor = SecurityVisitor(self.rules, context)
         visitor.visit(parsed.tree)
         return visitor.findings

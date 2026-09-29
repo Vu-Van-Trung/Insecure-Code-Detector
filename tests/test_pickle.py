@@ -8,7 +8,7 @@ from app.models.finding import Severity
 @pytest.mark.parametrize(
     "code",
     [
-        "import pickle\nobj = pickle.loads(request.data)",
+        "import pickle\nobj = pickle.loads(message.body)",
         "import pickle\nwith open(path, 'rb') as f:\n    obj = pickle.load(f)",
         "import pickle\npickle.Unpickler(stream).load()",
         "import pickle as pk\npk.loads(blob)",

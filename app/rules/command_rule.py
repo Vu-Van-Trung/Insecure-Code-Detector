@@ -6,9 +6,19 @@ import ast
 from collections.abc import Iterator
 
 from app.analyzer.context import AnalysisContext
-from app.analyzer.utils import get_argument, get_keyword, is_static_value
+from app.analyzer.utils import get_argument, get_keyword
 from app.models.finding import Finding, Severity
-from app.rules.base import DangerousCallRule, SecurityRule
+from app.rules.base import (
+    SANITIZED_CONFIDENCE,
+    SANITIZED_SEVERITY,
+    TAINTED_CONFIDENCE,
+    ArgumentKind,
+    DangerousCallRule,
+    SecurityRule,
+    classify_argument,
+    sanitized_message,
+    taint_details,
+)
 from app.rules.registry import register_rule
 
 _COMMAND_INJECTION_DESCRIPTION = (
@@ -79,9 +89,22 @@ class SubprocessShellRule(SecurityRule):
         command = get_argument(node, 0, "args") or get_argument(node, 0, "cmd")
         if command is None:
             return
-        static_command = is_static_value(command)
+        kind, info = classify_argument(command, context)
+        sink = f"{name}()"
 
-        if shell == _SHELL_ON and not static_command:
+        if kind is ArgumentKind.TAINTED:
+            yield self.create_finding(
+                node, context, f"Untrusted input from {info.source} reaches {sink} through the shell.",
+                severity=Severity.CRITICAL if shell == _SHELL_ON else Severity.HIGH,
+                confidence=TAINTED_CONFIDENCE if shell == _SHELL_ON else 0.7,
+                **taint_details(info, sink),
+            )
+        elif kind is ArgumentKind.SANITIZED:
+            yield self.create_finding(
+                node, context, sanitized_message(info, sink),
+                severity=SANITIZED_SEVERITY, confidence=SANITIZED_CONFIDENCE, **taint_details(info, sink),
+            )
+        elif shell == _SHELL_ON and kind is ArgumentKind.DYNAMIC:
             yield self.create_finding(
                 node, context, f"{name}() runs a dynamically built command with shell=True.",
                 confidence=0.85,
@@ -91,7 +114,7 @@ class SubprocessShellRule(SecurityRule):
                 node, context, f"{name}() runs a constant command with shell=True.",
                 severity=Severity.LOW, confidence=0.6,
             )
-        elif not static_command:
+        elif kind is ArgumentKind.DYNAMIC:
             yield self.create_finding(
                 node, context,
                 f"{name}() may enable the shell (shell= is not a constant) with a dynamic command.",

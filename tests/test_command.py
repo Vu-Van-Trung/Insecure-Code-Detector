@@ -10,7 +10,7 @@ from app.models.finding import Severity
 @pytest.mark.parametrize(
     "code",
     [
-        "import os\ncommand = input('Command: ')\nos.system(command)",
+        "import os\ndef run(command):\n    os.system(command)",  # parameter: origin unknown
         "import os\nos.system('ping ' + host)",
         "import os\nos.system(f'rm -rf {path}')",
         "import os as operating\noperating.system(cmd)",

@@ -1,0 +1,37 @@
+{
+    "sources": {
+        "functions": [
+            "input",
+            "raw_input",
+            "os.getenv",
+            "sys.stdin.read",
+            "sys.stdin.readline",
+            "sys.stdin.readlines",
+            "request.get_json",
+            "request.get_data"
+        ],
+        "attributes": [
+            "request.args",
+            "request.form",
+            "request.values",
+            "request.json",
+            "request.data",
+            "request.files",
+            "request.cookies",
+            "request.headers",
+            "request.GET",
+            "request.POST",
+            "request.body",
+            "request.query_params",
+            "request.path_params",
+            "sys.argv",
+            "os.environ"
+        ]
+    },
+    "sanitizers": [
+        "shlex.quote",
+        "pipes.quote",
+        "int",
+        "float"
+    ]
+}

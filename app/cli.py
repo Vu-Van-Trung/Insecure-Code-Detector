@@ -11,6 +11,7 @@ from typing import TextIO
 
 from app import __version__
 from app.analyzer.engine import AnalyzerEngine
+from app.config.loader import ConfigError
 from app.logging_config import setup_logging
 from app.models.finding import ScanResult, Severity
 from app.rules.registry import RuleRegistry, load_builtin_rules
@@ -63,6 +64,8 @@ def format_text_report(result: ScanResult) -> str:
             )
             if finding.code:
                 lines.append(f"      {finding.code}")
+            if finding.source:
+                lines.append(f"      Source: {finding.source}  Sink: {finding.sink}")
             if finding.taint_path:
                 lines.append(f"      Taint path: {' -> '.join(finding.taint_path)}")
 
@@ -92,7 +95,11 @@ def _write_output(content: str, output: str | None, stdout: TextIO) -> None:
 
 
 def run_scan(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
-    engine = AnalyzerEngine()
+    try:
+        engine = AnalyzerEngine()
+    except ConfigError as exc:
+        stderr.write(f"Error: invalid configuration: {exc}\n")
+        return EXIT_USAGE_ERROR
     try:
         result = engine.scan_path(args.target)
     except FileNotFoundError as exc:

@@ -7,3 +7,5 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Keep temporary test files inside the project (not in the system %TEMP%).
+addopts = "--basetemp=.tmp/pytest"

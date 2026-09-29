@@ -19,6 +19,12 @@ from app.rules.base import SecurityRule
 from app.rules.registry import RuleRegistry
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    # --basetemp=.tmp/pytest (pyproject.toml) keeps test files inside the
+    # project; pytest needs the parent directory to exist.
+    (config.rootpath / ".tmp").mkdir(exist_ok=True)
+
+
 class DemoCallRule(SecurityRule):
     id = "TEST001"
     name = "Call to dangerous_demo()"
