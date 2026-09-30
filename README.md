@@ -1,35 +1,417 @@
 # Secure Code Analyzer
 
-A Static Application Security Testing (SAST) tool for Python. It parses source
-code with the `ast` module and runs pluggable security rules over the tree.
-Analyzed code is **never executed**. It is only read as text and parsed.
+Công cụ **SAST (Static Application Security Testing)** cho mã nguồn **Python, Java và C#**, xây dựng trong đồ án
+*"Xây dựng công cụ phân tích mã nguồn và phát hiện một số mẫu mã không an toàn"*.
 
-> Status: Phase 1 (core infrastructure). Security rules, taint tracking, the web UI
-> and reports are added in later phases. This README will be completed in Phase 9.
+Công cụ phân tích mã nguồn bằng **cây cú pháp** (module `ast` cho Python, **tree-sitter** cho Java và C#),
+áp dụng một **Rule Engine** dạng plugin và **Taint Tracking** cơ bản để phát hiện các security anti-pattern.
+Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: không bao giờ bị import, biên dịch hay chạy.
 
-## Installation
+| Ngôn ngữ | Đuôi file | Parser | Rule |
+|---|---|---|---|
+| Python | `.py` | `ast` (thư viện chuẩn) | PY001–PY013 |
+| Java | `.java` | tree-sitter-java | JV001–JV009 |
+| C# | `.cs` | tree-sitter-c-sharp | CS001–CS009 |
 
-```bash
+---
+
+## 1. Tổng quan
+
+| Thành phần | Mô tả |
+|---|---|
+| Core Analyzer | Parser, Rule Engine, Taint Tracking. Phần Python chỉ dùng thư viện chuẩn; Java/C# dùng tree-sitter. Độc lập với Web UI |
+| CLI | `python main.py scan <file_or_directory>` — dùng được trong CI/CD (exit code) |
+| Web UI | FastAPI + Bootstrap 5 + Chart.js tại `http://127.0.0.1:8000` |
+| Report | JSON, CSV, HTML |
+
+Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/SonarQube/CodeQL làm engine.
+
+## 2. Tính năng
+
+- **31 security rules**: 13 cho Python, 9 cho Java, 9 cho C#; mỗi rule có severity, confidence, CWE, recommendation.
+- **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
+  `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
+- **Taint tracking** intra-procedural cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
+  (vd `@RequestParam -> name -> sql -> Statement.executeQuery()`, `[FromQuery] -> host -> Process.Start()`).
+- **Sanitizer** cấu hình được (`shlex.quote`, `int`, ...). Luồng đã sanitize vẫn được báo ở mức LOW.
+- **Severity theo ngữ cảnh**: cùng `os.system()` nhưng `input()` → CRITICAL, hằng số → LOW.
+- **Whitelist** (file, rule, secret, comment `# analyzer-ignore`) và **Blacklist** (JSON).
+- **Web UI**: upload nhiều file `.py`/`.java`/`.cs` hoặc paste code (chọn ngôn ngữ), dashboard, biểu đồ,
+  chi tiết finding, export report.
+- **Bảo mật của chính ứng dụng**: không thực thi code upload, không ghi file upload xuống đĩa,
+  chống path traversal, giới hạn kích thước/số lượng/extension, CSP, escape toàn bộ output.
+- **Logging** vào `logs/analyzer.log` (chỉ metadata, không log source code hay secret).
+- **578 unit test** (pytest).
+
+## 3. Kiến trúc
+
+```text
+                +-------------------+      +---------------------+
+  CLI  -------> |                   |      |  Rules (plugins)    |
+  (main.py)     |   AnalyzerEngine  | ---> |  PY001 ... PY013    |
+                |   (app/analyzer)  |      |  auto-discovered    |
+  Web UI -----> |                   |      +---------------------+
+  (FastAPI)     +---------+---------+
+                          |
+     languages.py   -> chọn ngôn ngữ theo đuôi file (.py / .java / .cs)
+     Python:  parser.py (ast.parse) -> context.py -> taint.py -> visitor.py (ast.NodeVisitor)
+     Java/C#: ts/adapters.py (tree-sitter -> mô hình chung: CallSite, khai báo, phép gán, method)
+              -> ts/context.py (suy luận kiểu biến) -> ts/taint.py
+     suppression.py -> # / // analyzer-ignore
+                          |
+                    ScanResult  ---> reports/ (JSON, CSV, HTML)
+```
+
+Pipeline cho mỗi file:
+
+```text
+parse -> rules (AST + taint) -> bỏ trùng lặp rule blacklist -> ghi đè severity
+      -> suppression (whitelist / inline) -> ngưỡng min_severity / min_confidence
+```
+
+Cấu trúc thư mục:
+
+```text
+app/
+  main.py              FastAPI web app
+  cli.py               CLI (được gọi từ main.py ở thư mục gốc)
+  storage.py           Lưu kết quả scan của web dạng JSON (data/scans/)
+  logging_config.py    Cấu hình logging
+  analyzer/            parser, context, visitor, engine, taint, suppression, languages, utils
+  analyzer/ts/         adapters (Java, C#), context, taint cho tree-sitter
+  rules/               base, registry, rule Python (9 file), java_rules.py, csharp_rules.py,
+                       _ts_common.py (logic chung Java/C#), _keywords.py (từ khóa dùng chung)
+  models/finding.py    Finding, ScanResult, Severity
+  reports/             json_report, csv_report, html_report
+  config/              rules.json, severity.json, taint.json (Python), taint_java.json, taint_csharp.json,
+                       settings.py, loader.py
+web/templates, web/static   Giao diện (Jinja2, Bootstrap, Chart.js, app.js)
+tests/                 unit test + tests/vulnerable, tests/safe (fixture có marker # expect:)
+samples/               mẫu demo vulnerable/ và safe/
+whitelist.json, blacklist.json
+```
+
+**Thêm rule mới (ví dụ PY016)**: tạo `app/rules/xxx_rule.py` chứa lớp kế thừa `SecurityRule` và gắn
+`@register_rule`. Registry tự nạp mọi module trong `app/rules/` — **không cần sửa Analyzer Core**.
+
+```python
+@register_rule
+class MyRule(SecurityRule):
+    id = "PY016"; name = "..."; description = "..."; severity = Severity.HIGH
+    cwe = "CWE-xxx"; category = "..."; recommendation = "..."
+
+    def check(self, node, context):
+        if isinstance(node, ast.Call) and context.call_name(node) == "danger.func":
+            yield self.create_finding(node, context, "message", confidence=0.8)
+```
+
+## 4. Cài đặt
+
+Yêu cầu Python **3.12+**.
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # Linux/macOS
+.venv\Scripts\activate            # Windows (PowerShell)
+# source .venv/bin/activate       # Linux / macOS
 pip install -r requirements.txt
 ```
 
-## CLI
+Phân tích Python chỉ cần thư viện chuẩn. Phân tích Java/C# cần `tree-sitter`, `tree-sitter-java`,
+`tree-sitter-c-sharp` (có bản dựng sẵn, không cần cài JDK hay .NET). Nếu thiếu, file Java/C# được báo lỗi
+`LanguageUnavailable` còn file Python vẫn được scan bình thường.
 
-```bash
-python main.py scan path/to/file.py
-python main.py scan ./project
+## 5. Chạy Web
+
+```powershell
+python main.py web                  # http://127.0.0.1:8000
+python main.py web --port 8080
+# hoặc: uvicorn app.main:app
+```
+
+Luồng demo: **Home → Upload file / Paste Code → Start Scan → Dashboard → click finding → Export report**.
+
+- Dashboard: Files/Lines scanned, Total findings, số lượng theo Critical/High/Medium/Low/Info,
+  biểu đồ Chart.js, bảng finding có lọc theo severity và tìm kiếm.
+- Finding detail: Rule ID, Rule Name, Severity, Confidence, CWE, File, Line, Column, Description,
+  Vulnerable Code, Recommendation, Source/Sink và Taint Path.
+- Export: nút JSON / CSV / HTML.
+- JSON API: `POST /api/scan` (`{"code": "...", "filename": "a.py"}`), `GET /api/scan/{id}`,
+  `GET /api/rules`, tài liệu tại `/api/docs`.
+
+Giới hạn upload: chỉ `.py`, `.java`, `.cs`; tối đa 20 file, 1 MB/file, 5 MB/request. Khi paste code, chọn
+ngôn ngữ trong ô *Language* (đuôi file được chỉnh tự động). JSON API nhận thêm `"language": "java" | "csharp"`.
+
+## 6. Chạy CLI
+
+```powershell
+python main.py scan test.py
+python main.py scan UserController.java
+python main.py scan ./project            # quét cả .py, .java, .cs
 python main.py scan ./project --format json -o report.json
+python main.py scan ./project --format html -o report.html
+python main.py scan ./project --format csv  -o report.csv
 python main.py rules
 ```
 
-Exit codes: `0` means no findings, `1` means findings were reported, and `2`
-means a usage error such as a missing target.
+| Tùy chọn | Ý nghĩa |
+|---|---|
+| `--format text\|json\|csv\|html` | Định dạng output (mặc định `text`) |
+| `-o, --output FILE` | Ghi report ra file |
+| `--whitelist FILE` / `--no-whitelist` | Chọn whitelist (mặc định `./whitelist.json` nếu có) |
+| `--blacklist FILE` | Chọn blacklist (mặc định `blacklist.json` của công cụ) |
+| `--disable PY009,PY013` | Tắt rule |
+| `--min-severity MEDIUM` | Ẩn finding dưới mức này |
+| `--min-confidence 0.7` | Ẩn finding có confidence thấp hơn |
+| `--fail-on HIGH` | Chỉ trả exit code 1 khi có finding ≥ HIGH (dùng cho CI/CD) |
 
-## Tests
+Exit code: `0` không có finding (vượt ngưỡng `--fail-on`), `1` có finding, `2` lỗi sử dụng/cấu hình.
 
-```bash
-python -m pytest
+## 7. Danh sách rule
+
+Xem đầy đủ bằng `python main.py rules`.
+
+### Python
+
+| ID | Tên | Severity mặc định | CWE | Ghi chú |
+|---|---|---|---|---|
+| PY001 | `eval()` | CRITICAL | CWE-95 | hằng số → LOW; bỏ qua `ast.literal_eval`, `model.eval()`, `eval` tự định nghĩa |
+| PY002 | `exec()` | CRITICAL | CWE-95 | như PY001 |
+| PY003 | `os.system()` / `os.popen()` | HIGH | CWE-78 | tainted → CRITICAL, hằng số → LOW |
+| PY004 | `subprocess.*` với `shell=True`, `getoutput` | HIGH | CWE-78 | `shell=<biến>` → MEDIUM; `shell=False`/list → không báo |
+| PY005 | `pickle`/`dill`/`pandas.read_pickle` load | HIGH | CWE-502 | `dump`/`dumps` không báo |
+| PY006 | YAML loader không an toàn | HIGH | CWE-502 | `FullLoader` → MEDIUM; `SafeLoader`/`safe_load` → không báo |
+| PY007 | Hardcoded secret | HIGH | CWE-798 | tên biến + entropy + định dạng key đã biết; bỏ qua placeholder; **giá trị bị che** |
+| PY008 | MD5 / SHA-1 | MEDIUM | CWE-328 | hash password → HIGH; `usedforsecurity=False` → không báo |
+| PY009 | `random` cho token/password/otp... | MEDIUM | CWE-330 | không báo `random` dùng cho game/mô phỏng |
+| PY010 | `verify=False`, `ssl.CERT_NONE` | MEDIUM | CWE-295 | `verify="ca.pem"`, `verify=None` → không báo |
+| PY011 | SQL nối chuỗi / f-string / `%` / `.format()` | HIGH | CWE-89 | tainted → CRITICAL; query tham số hóa → không báo |
+| PY012 | Hàm trong `blacklist.json` | theo blacklist | theo blacklist | bỏ khi rule chuyên biệt đã báo cùng vị trí |
+| PY013 | Import module trong `blacklist.json` | INFO | theo blacklist | nhắc review, không phải lỗ hổng |
+
+### Java và C#
+
+Hai ngôn ngữ dùng cùng một bộ logic (`_ts_common.py`) và cách chấm điểm giống Python:
+tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, hằng số → LOW hoặc không báo,
+đi qua sanitizer → LOW.
+
+| CWE | Java | C# | Ghi chú |
+|---|---|---|---|
+| CWE-78 | **JV001** `Runtime.exec`, `ProcessBuilder` | **CS001** `Process.Start`, `ProcessStartInfo` | chương trình cố định + tham số riêng, không qua shell → không báo |
+| CWE-89 | **JV002** `executeQuery`, `prepareStatement`, JPA, JdbcTemplate | **CS002** `new SqlCommand`, `CommandText`, `FromSqlRaw`, Dapper | query tham số hóa, `FromSqlInterpolated` → không báo |
+| CWE-502 | **JV003** `ObjectInputStream.readObject`, `XMLDecoder`, `XStream`, SnakeYAML | **CS003** `BinaryFormatter.Deserialize`, Json.NET `TypeNameHandling` | `System.Text.Json`, Gson → không báo |
+| CWE-95 | **JV004** `ScriptEngine.eval`, SpEL (CWE-917), Groovy | **CS004** `CSharpScript.EvaluateAsync` | |
+| CWE-328 | **JV005** `MessageDigest.getInstance("MD5"/"SHA-1")`, `DigestUtils.md5` | **CS005** `MD5.Create`, `SHA1`, `HashAlgorithm.Create("MD5")` | |
+| CWE-327 | **JV006** `Cipher.getInstance("DES"/"RC4"/".../ECB/..."/"AES")` | **CS006** `DES`, `TripleDES`, `RC2`, `CipherMode.ECB` | |
+| CWE-330 | **JV007** `java.util.Random`, `Math.random` cho token/otp... | **CS007** `System.Random` cho token/otp... | `SecureRandom`, `RandomNumberGenerator` → không báo |
+| CWE-798 | **JV008** secret theo tên + entropy, key đã biết, `password=` trong JDBC URL | **CS008** như Java + `Password=` trong connection string, property initializer | giá trị bị che |
+| CWE-295 | **JV009** TrustManager rỗng, `verify()` luôn `true`, `NoopHostnameVerifier` | **CS009** callback trả `true`, `DangerousAcceptAnyServerCertificateValidator` | |
+
+### Severity và Confidence
+
+- Severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` — xác định theo **rule và ngữ cảnh**, không phải
+  mọi finding đều CRITICAL. Có thể ghi đè theo rule trong `app/config/severity.json`:
+  `{"overrides": {"PY009": "LOW"}}`.
+- Confidence `0.0 → 1.0` là **mức tin cậy heuristic của analyzer, không phải xác suất toán học chính xác**:
+
+| Confidence | Khi nào |
+|---|---|
+| 0.95 | Taint tracking chứng minh dữ liệu từ source tới sink |
+| 0.80–0.90 | API nguy hiểm với argument động |
+| 0.50–0.75 | Dựa vào tên biến / ngữ cảnh |
+| 0.40 | Dữ liệu đi qua sanitizer mà analyzer không chứng minh được là đủ |
+
+## 8. Whitelist
+
+> **Whitelist chỉ ẩn (suppress) cảnh báo, KHÔNG làm cho mã nguồn trở nên an toàn.**
+> Finding bị ẩn vẫn được đếm và liệt kê trong mục *Suppressed* của report.
+
+Comment trong code (cùng dòng, hoặc dòng ngay phía trên):
+
+```python
+# analyzer-ignore: PY001
+result = eval(expression)
+
+os.system(cmd)  # analyzer-ignore: PY003, PY004
 ```
+
+```java
+Runtime.getRuntime().exec(cmd); // analyzer-ignore: JV001
+/* analyzer-ignore: CS002 */
+```
+
+`# analyzer-ignore` không kèm ID sẽ ẩn mọi rule trên dòng đó. Comment được đọc bằng `tokenize`, nên
+chuỗi `"# analyzer-ignore"` nằm trong string không có tác dụng.
+
+File `whitelist.json` (của dự án được scan):
+
+```json
+{
+    "files": ["tests/test_*.py", "legacy/*"],
+    "disabled_rules": ["PY009"],
+    "allowed_secrets": ["test_[0-9a-f]{32}"]
+}
+```
+
+- `files`: glob pattern, file khớp sẽ không được scan (đếm trong *Skipped files*).
+- `disabled_rules`: tắt rule.
+- `allowed_secrets`: regex các giá trị không phải secret thật (dành cho PY007).
+
+## 9. Blacklist
+
+`blacklist.json` cho phép khai báo hàm/module nguy hiểm **không cần sửa code** (rule PY012/PY013).
+Mỗi mục là tên (dạng ngắn như đề bài) hoặc object có `severity`, `cwe`, `reason`:
+
+```json
+{
+    "dangerous_functions": [
+        "eval", "exec", "os.system",
+        {"name": "marshal.loads", "severity": "HIGH", "cwe": "CWE-502", "reason": "marshal is not secure"}
+    ],
+    "dangerous_modules": ["pickle", {"name": "telnetlib", "severity": "LOW", "cwe": "CWE-319"}]
+}
+```
+
+Khi rule chuyên biệt (vd PY001 cho `eval`) đã báo cùng vị trí, finding chung của PY012 bị bỏ để tránh
+trùng lặp. Nếu tắt PY001, PY012 vẫn đảm bảo `eval` được báo.
+
+## 10. Taint analysis
+
+Sources và sanitizers khai báo trong `app/config/taint.json` (Python), `taint_java.json` và
+`taint_csharp.json`. Ví dụ với Python:
+
+```json
+{
+    "sources": {
+        "functions": ["input", "os.getenv", "sys.stdin.read", "request.get_json"],
+        "attributes": ["request.args", "request.form", "request.json", "request.cookies", "sys.argv", "os.environ"]
+    },
+    "sanitizers": ["shlex.quote", "int", "float"]
+}
+```
+
+Sinks là argument nguy hiểm của các rule PY001–PY005 và PY011 (`eval`, `exec`, `os.system`,
+`subprocess.*`, `pickle.loads`, `cursor.execute`, ...). Mỗi biểu thức được gắn một nhãn:
+
+- **TAINTED** — chứa dữ liệu từ source (lưu source và đường đi qua các biến);
+- **STATIC** — cố định trong code (`cmd = "ls"; os.system(cmd)` → LOW);
+- **UNKNOWN** — tham số hàm, kết quả lời gọi hàm bất kỳ.
+
+Ví dụ:
+
+```python
+command = input("Command: ")
+os.system(command)
+```
+
+```text
+[CRITICAL] PY003 app.py:2:0 - Untrusted input from input() reaches os.system().
+    Source: input()  Sink: os.system()
+    Taint path: input() -> command -> os.system()
+```
+
+Với Java/C#, source gồm lời gọi (`request.getParameter()`, `Console.ReadLine()`, `System.getenv()`),
+thành viên (`Request.Query`, `Request.Form`), **tham số có annotation/attribute** (`@RequestParam`,
+`@PathVariable`, `[FromQuery]`, `[FromBody]`...) và `args` của `main`. Sanitizer mặc định:
+`Integer.parseInt`, `int.Parse`, `Guid.Parse`...
+
+```text
+[CRITICAL] CS001 AccountController.cs:27:8 - Untrusted input from [FromQuery] reaches Process.Start().
+    Source: [FromQuery]  Sink: Process.Start()
+    Taint path: [FromQuery] -> host -> Process.Start()
+```
+
+Taint được lan truyền qua nối chuỗi, f-string / `$"..."`, `%`, `.format()` / `String.format`, method call (`.strip()`, `.get()`),
+list/dict, comprehension, `for`, `with`, unpack tuple, `+=`, `self.x`. Phép gán trong nhánh
+`if`/`for`/`try` chỉ **thêm** taint, không xóa (xấp xỉ bảo thủ).
+
+**Sanitizer**: `source → shlex.quote() → sink` vẫn được báo ở mức **LOW, confidence 0.4**, kèm ghi chú
+*"the analyzer cannot prove this sanitizer is sufficient"* — vì công cụ không chứng minh được sanitizer
+phù hợp với sink (vd `shlex.quote` không chống được SQL injection).
+
+## 11. Testing
+
+```powershell
+python -m pytest -q                     # toàn bộ 578 test
+python -m pytest tests/test_taint.py -v # một nhóm
+```
+
+| Nhóm | File |
+|---|---|
+| Rule Python (vulnerable / safe / false positive) | `test_eval.py`, `test_exec.py`, `test_command.py`, `test_pickle.py`, `test_yaml.py`, `test_secret.py`, `test_crypto.py`, `test_requests.py`, `test_sql.py` |
+| Rule Java / C# (kèm taint) | `test_java.py`, `test_csharp.py` |
+| Taint tracking | `test_taint.py` |
+| Whitelist / Blacklist / Severity | `test_whitelist.py`, `test_blacklist.py`, `test_severity.py` |
+| Core | `test_parser.py`, `test_utils.py`, `test_registry.py`, `test_engine.py`, `test_models.py` |
+| CLI / Report / Web | `test_cli.py`, `test_reports.py`, `test_web.py` |
+| Fixture & sample | `test_fixtures.py` (so khớp chính xác marker `# expect: PYxxx` trong `tests/vulnerable/`), `test_samples.py` |
+
+File tạm của test nằm trong `.tmp/` của project (không dùng thư mục temp của hệ thống).
+
+## 12. Ví dụ output
+
+```text
+$ python main.py scan samples/vulnerable/sql_vulnerable.py
+Secure Code Analyzer v1.0.0
+
+Scanning: samples/vulnerable/sql_vulnerable.py
+
+Files scanned: 1
+Lines scanned: 28
+
+CRITICAL: 1
+HIGH:     1
+MEDIUM:   0
+LOW:      0
+INFO:     0
+
+Total findings: 2
+
+Findings:
+  [CRITICAL] PY011 samples/vulnerable/sql_vulnerable.py:22:4 - Untrusted input from request.args is used to build the SQL query passed to cursor.execute(). (CWE-89, confidence 95%)
+      cursor.execute(query)  # PY011: SQL injection (tainted)
+      Source: request.args  Sink: cursor.execute()
+      Taint path: request.args -> user_id -> query -> cursor.execute()
+  [HIGH] PY011 samples/vulnerable/sql_vulnerable.py:27:4 - SQL query built from dynamic values is passed to cursor.execute(). (CWE-89, confidence 85%)
+      cursor.execute(f"SELECT * FROM products WHERE name LIKE '%{keyword}%'")  # PY011
+```
+
+Khi file không parse được:
+
+```text
+Errors (1):
+  bad.py:12 - SyntaxError: Python SyntaxError: invalid syntax
+```
+
+Các file trong `samples/vulnerable/` **cố ý chứa lỗ hổng**, chỉ để kiểm thử cục bộ; không chạy và không
+triển khai chúng. Mọi secret trong đó là giá trị giả.
+
+## 13. Hạn chế
+
+- **Không có phân tích liên hàm (inter-procedural)**: `run(input())` với `def run(cmd): os.system(cmd)`
+  chỉ được báo HIGH (argument không rõ nguồn), không lên CRITICAL.
+- Nhánh điều kiện được hợp nhất bảo thủ; không phân tích đường đi (path-sensitive).
+- Container được theo dõi như một khối (`d["a"] = tainted` → cả `d` bị taint).
+- Sanitizer không phân biệt theo loại sink.
+- Chỉ nhận diện API theo tên đầy đủ; đối tượng mà kiểu không suy ra được (vd `session.get(..., verify=False)`)
+  được xử lý bằng heuristic với confidence thấp hơn.
+- PY007 dựa vào tên biến và entropy nên vẫn có thể bỏ sót hoặc báo nhầm.
+- Java/C#: không phân giải kiểu đầy đủ như trình biên dịch (không đọc `import`/`using` hay thư viện);
+  kiểu của biến được suy từ khai báo và `new T()`, nên đối tượng truyền qua nhiều lớp có thể bị bỏ sót.
+  Không phân tích lambda, generic phức tạp, LINQ, annotation cấu hình (Spring Security...).
+- Java/C# yêu cầu UTF-8; file có lỗi cú pháp không được phân tích (báo *Scan failed*).
+- Web UI không có xác thực người dùng; chỉ nên chạy trên `127.0.0.1`. Bootstrap/Chart.js tải từ CDN
+  (cần Internet khi mở trang).
+- Static analysis có thể có false positive và false negative — mọi finding cần được review.
+
+## 14. Hướng phát triển
+
+- Phân tích liên hàm và giữa các module (call graph), phân tích path-sensitive.
+- Thêm ngôn ngữ khác qua tree-sitter (JavaScript/TypeScript, PHP, Go): chỉ cần một adapter và bộ rule mới.
+- Phân giải kiểu Java/C# đầy đủ hơn (đọc `import`/`using`, kiểu trả về của method).
+- Sanitizer theo loại sink (command / SQL / HTML).
+- Thêm rule: XSS trong template, path traversal (`open(request.args[...])`), SSRF, XXE, `tempfile.mktemp`,
+  JWT không verify, `assert` dùng cho kiểm tra bảo mật.
+- Output SARIF để tích hợp GitHub Code Scanning; pre-commit hook.
+- Lưu lịch sử scan bằng SQLite + SQLAlchemy, so sánh giữa các lần scan.
+- Xuất PDF; tự host Bootstrap/Chart.js kèm Subresource Integrity để chạy offline.
+- Xác thực người dùng và CSRF token nếu triển khai Web UI cho nhiều người dùng.

@@ -1,0 +1,17 @@
+{
+    "dangerous_functions": [
+        "eval",
+        "exec",
+        "os.system",
+        {"name": "marshal.loads", "severity": "HIGH", "cwe": "CWE-502", "reason": "marshal is not secure against malicious data"},
+        {"name": "marshal.load", "severity": "HIGH", "cwe": "CWE-502", "reason": "marshal is not secure against malicious data"},
+        {"name": "shelve.open", "severity": "MEDIUM", "cwe": "CWE-502", "reason": "shelve uses pickle internally"},
+        {"name": "tempfile.mktemp", "severity": "MEDIUM", "cwe": "CWE-377", "reason": "race condition between name creation and file creation; use tempfile.mkstemp()"}
+    ],
+    "dangerous_modules": [
+        "pickle",
+        {"name": "marshal", "severity": "LOW", "cwe": "CWE-502", "reason": "unsafe for untrusted data"},
+        {"name": "telnetlib", "severity": "LOW", "cwe": "CWE-319", "reason": "Telnet sends credentials in cleartext"},
+        {"name": "ftplib", "severity": "LOW", "cwe": "CWE-319", "reason": "FTP sends credentials in cleartext; prefer SFTP/FTPS"}
+    ]
+}

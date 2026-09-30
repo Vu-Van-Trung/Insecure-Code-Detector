@@ -1,0 +1,7 @@
+{
+    "files": [
+        "tests/test_*.py"
+    ],
+    "disabled_rules": [],
+    "allowed_secrets": []
+}

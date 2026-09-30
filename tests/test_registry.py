@@ -57,7 +57,8 @@ def test_load_builtin_rules_returns_registry():
     registry = load_builtin_rules()
     assert isinstance(registry, RuleRegistry)
     assert all(issubclass(rule, SecurityRule) for rule in registry)
-    assert all(rule.node_types for rule in registry)
+    # Python rules are dispatched by AST node type; Java/C# rules inspect the whole file.
+    assert all(rule.node_types for rule in registry if rule.language == "python")
 
 
 def test_builtin_rules_are_auto_discovered():

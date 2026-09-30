@@ -1,6 +1,7 @@
 import pytest
 
 from app.analyzer.engine import AnalyzerEngine
+from app.config.settings import AnalyzerSettings
 
 VULNERABLE = "import demo_module as dm\n\ndef f(x):\n    return dm.dangerous_demo(x)\n"
 SAFE = "def f(x):\n    return x + 1\n"
@@ -65,7 +66,8 @@ def test_missing_target_raises(demo_engine, tmp_path):
 
 
 def test_disabled_rule_produces_no_findings(demo_registry):
-    engine = AnalyzerEngine(registry=demo_registry, disabled_rules={"TEST001"})
+    settings = AnalyzerSettings.load().with_changes(disabled_rules=frozenset({"TEST001"}))
+    engine = AnalyzerEngine(registry=demo_registry, settings=settings)
     assert engine.scan_source(VULNERABLE).findings == []
 
 
@@ -78,3 +80,28 @@ def test_crashing_rule_does_not_abort_scan(demo_registry, monkeypatch):
     monkeypatch.setattr(DemoCallRule, "check", boom)
     result = AnalyzerEngine(registry=demo_registry).scan_source(VULNERABLE)
     assert result.files_scanned == 1 and result.findings == []
+
+
+def test_directory_with_several_languages(engine, tmp_path):
+    (tmp_path / "a.py").write_text("eval(input())\n")
+    (tmp_path / "B.java").write_text('class B { void m() throws Exception { Runtime.getRuntime().exec("ls"); } }\n')
+    (tmp_path / "C.cs").write_text("class C { void M() { var h = System.Security.Cryptography.MD5.Create(); } }\n")
+    (tmp_path / "notes.md").write_text("eval(x)\n")
+    result = engine.scan_path(tmp_path)
+    assert result.files_scanned == 3
+    assert {f.language for f in result.files} == {"python", "java", "csharp"}
+    assert {f.rule_id for f in result.findings} == {"PY001", "JV001", "CS005"}
+
+
+def test_missing_tree_sitter_only_affects_java_and_csharp(engine, tmp_path, monkeypatch):
+    from app.analyzer.ts import adapters
+
+    def unavailable(language):
+        raise adapters.LanguageUnavailable("tree-sitter is not installed")
+
+    monkeypatch.setattr(adapters, "get_adapter", unavailable)
+    (tmp_path / "a.py").write_text("eval(x)\n")
+    (tmp_path / "B.java").write_text("class B {}\n")
+    result = engine.scan_path(tmp_path)
+    assert [f.rule_id for f in result.findings] == ["PY001"]
+    assert [e.error_type for e in result.errors] == ["LanguageUnavailable"]

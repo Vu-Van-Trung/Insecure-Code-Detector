@@ -1,0 +1,11 @@
+{
+    "disabled_rules": [],
+    "min_confidence": 0.0,
+    "min_severity": "INFO",
+    "max_file_size": 1048576,
+    "excluded_dirs": [
+        ".git", ".hg", ".svn", "__pycache__", ".venv", "venv", "env",
+        "node_modules", "site-packages", "build", "dist",
+        ".tox", ".mypy_cache", ".pytest_cache", ".tmp"
+    ]
+}

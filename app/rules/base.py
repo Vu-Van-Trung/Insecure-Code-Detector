@@ -6,12 +6,15 @@ import ast
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from enum import Enum
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from app.analyzer.context import AnalysisContext
 from app.analyzer.taint import TaintInfo
 from app.analyzer.utils import get_argument
 from app.models.finding import Finding, Severity
+
+if TYPE_CHECKING:
+    from app.config.settings import AnalyzerSettings
 
 
 class SecurityRule(ABC):
@@ -30,6 +33,10 @@ class SecurityRule(ABC):
     category: ClassVar[str]
     recommendation: ClassVar[str]
     node_types: ClassVar[tuple[type[ast.AST], ...]] = (ast.Call,)
+    # Generic (blacklist-driven) rules yield to a specific rule reporting the same location.
+    generic: ClassVar[bool] = False
+    # Source language checked by the rule (python, java, csharp).
+    language: ClassVar[str] = "python"
 
     _REQUIRED_ATTRIBUTES: ClassVar[tuple[str, ...]] = (
         "id", "name", "description", "severity", "cwe", "category", "recommendation",
@@ -45,6 +52,9 @@ class SecurityRule(ABC):
         if missing:
             raise TypeError(f"Rule {cls.__name__} is missing attributes: {', '.join(missing)}")
         cls.severity = Severity.parse(cls.severity)
+
+    def configure(self, settings: AnalyzerSettings) -> None:
+        """Called once by the engine; rules needing configuration override this."""
 
     @abstractmethod
     def check(self, node: ast.AST, context: AnalysisContext) -> Iterable[Finding]:
@@ -62,6 +72,7 @@ class SecurityRule(ABC):
         sink: str | None = None,
         taint_path: list[str] | None = None,
         code: str | None = None,
+        cwe: str | None = None,
     ) -> Finding:
         """Build a Finding pre-filled with this rule's metadata and node location.
 
@@ -69,7 +80,7 @@ class SecurityRule(ABC):
         issue more or less serious (e.g. untrusted input reaching a sink).
         ``code`` replaces the source line shown in reports, e.g. to mask a secret.
         """
-        line = getattr(node, "lineno", 0)
+        line, column = node_location(node)
         return Finding(
             rule_id=self.id,
             rule_name=self.name,
@@ -77,12 +88,12 @@ class SecurityRule(ABC):
             confidence=confidence,
             file=context.filename,
             line=line,
-            column=getattr(node, "col_offset", 0),
+            column=column,
             message=message,
             description=self.description,
             code=code if code is not None else context.get_line(line),
             recommendation=self.recommendation,
-            cwe=self.cwe,
+            cwe=cwe or self.cwe,
             category=self.category,
             source=source,
             sink=sink,
@@ -92,6 +103,7 @@ class SecurityRule(ABC):
     def metadata(self) -> dict[str, str]:
         return {
             "id": self.id,
+            "language": self.language,
             "name": self.name,
             "severity": self.severity.value,
             "cwe": self.cwe,
@@ -161,6 +173,16 @@ class DangerousCallRule(SecurityRule):
                 node, context, self.dynamic_message.format(name=name),
                 confidence=self.dynamic_confidence,
             )
+
+
+def node_location(node: Any) -> tuple[int, int]:
+    """(line, column) of a Python ``ast`` node or a tree-sitter node (1-based line)."""
+    if hasattr(node, "lineno"):
+        return node.lineno, getattr(node, "col_offset", 0)
+    point = getattr(node, "start_point", None)
+    if point is not None:
+        return point[0] + 1, point[1]
+    return 0, 0
 
 
 # ------------------------------------------------------------------ taint helpers

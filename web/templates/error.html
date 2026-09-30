@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Error {{ status }} - Secure Code Analyzer{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="alert alert-danger">
+      <h1 class="h5"><i class="bi bi-x-octagon"></i> Error {{ status }}</h1>
+      <p class="mb-0">{{ message }}</p>
+    </div>
+    <a class="btn btn-primary" href="/">Back to home</a>
+  </div>
+</div>
+{% endblock %}

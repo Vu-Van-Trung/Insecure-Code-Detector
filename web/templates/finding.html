@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ finding.rule_id }} - Secure Code Analyzer{% endblock %}
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb small">
+    <li class="breadcrumb-item"><a href="/">Home</a></li>
+    <li class="breadcrumb-item"><a href="/scan/{{ scan_id }}">Scan result</a></li>
+    <li class="breadcrumb-item active" aria-current="page">Finding {{ index + 1 }} / {{ total }}</li>
+  </ol>
+</nav>
+
+<div class="card finding-card sev-border-{{ finding.severity.value|lower }}">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between gap-2">
+      <h1 class="h4 mb-1">{{ finding.rule_id }} &ndash; {{ finding.rule_name }}</h1>
+      <span class="badge fs-6 sev-{{ finding.severity.value|lower }} align-self-start">{{ finding.severity.value }}</span>
+    </div>
+    <p class="lead fs-6">{{ finding.message }}</p>
+
+    <dl class="row small mb-3">
+      <dt class="col-sm-3">Rule ID</dt><dd class="col-sm-9">{{ finding.rule_id }}</dd>
+      <dt class="col-sm-3">Rule Name</dt><dd class="col-sm-9">{{ finding.rule_name }}</dd>
+      <dt class="col-sm-3">Severity</dt><dd class="col-sm-9">{{ finding.severity.value }}</dd>
+      <dt class="col-sm-3">Confidence</dt><dd class="col-sm-9">{{ (finding.confidence * 100)|round|int }}% <span class="text-secondary">(heuristic)</span></dd>
+      <dt class="col-sm-3">CWE</dt><dd class="col-sm-9">{{ finding.cwe }}</dd>
+      <dt class="col-sm-3">Category</dt><dd class="col-sm-9">{{ finding.category }}</dd>
+      <dt class="col-sm-3">Language</dt><dd class="col-sm-9">{{ language_names.get(finding.language, finding.language) }}</dd>
+      <dt class="col-sm-3">File</dt><dd class="col-sm-9">{{ finding.file }}</dd>
+      <dt class="col-sm-3">Line</dt><dd class="col-sm-9">{{ finding.line }}</dd>
+      <dt class="col-sm-3">Column</dt><dd class="col-sm-9">{{ finding.column }}</dd>
+      {% if finding.source %}
+      <dt class="col-sm-3">Source</dt><dd class="col-sm-9 font-monospace">{{ finding.source }}</dd>
+      <dt class="col-sm-3">Sink</dt><dd class="col-sm-9 font-monospace">{{ finding.sink }}</dd>
+      {% endif %}
+    </dl>
+
+    <h2 class="h6">Description</h2>
+    <p>{{ finding.description }}</p>
+
+    <h2 class="h6">Vulnerable Code</h2>
+    <pre class="code-block"><code><span class="text-secondary">{{ finding.line }} |</span> {{ finding.code }}</code></pre>
+
+    {% if finding.taint_path %}
+    <h2 class="h6">Taint Path</h2>
+    <ol class="taint-path">
+      {% for step in finding.taint_path %}
+      <li class="{% if loop.first %}source{% elif loop.last %}sink{% endif %}"><code>{{ step }}</code>
+        {% if loop.first %}<span class="small text-secondary">source</span>{% elif loop.last %}<span class="small text-secondary">sink</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% endif %}
+
+    <h2 class="h6">Recommendation</h2>
+    <div class="alert alert-success mb-0"><i class="bi bi-lightbulb"></i> {{ finding.recommendation }}</div>
+  </div>
+  <div class="card-footer d-flex justify-content-between">
+    {% if index > 0 %}<a class="btn btn-sm btn-outline-secondary" href="/scan/{{ scan_id }}/finding/{{ index - 1 }}"><i class="bi bi-chevron-left"></i> Previous</a>{% else %}<span></span>{% endif %}
+    <a class="btn btn-sm btn-outline-primary" href="/scan/{{ scan_id }}">Back to results</a>
+    {% if index + 1 < total %}<a class="btn btn-sm btn-outline-secondary" href="/scan/{{ scan_id }}/finding/{{ index + 1 }}">Next <i class="bi bi-chevron-right"></i></a>{% else %}<span></span>{% endif %}
+  </div>
+</div>
+{% endblock %}

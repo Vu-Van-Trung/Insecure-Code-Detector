@@ -22,12 +22,17 @@ import math
 import re
 from collections import Counter
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 from app.analyzer.context import AnalysisContext
+from app.config.settings import Whitelist
 from app.models.finding import Finding, Severity
 from app.rules._keywords import is_secret_name
 from app.rules.base import SecurityRule
 from app.rules.registry import register_rule
+
+if TYPE_CHECKING:
+    from app.config.settings import AnalyzerSettings
 
 MIN_SECRET_LENGTH = 4
 # Shannon entropy (bits per character) above which a value looks randomly generated.
@@ -122,6 +127,14 @@ class HardcodedSecretRule(SecurityRule):
     )
     node_types = (ast.Assign, ast.AnnAssign, ast.keyword, ast.Dict, ast.Constant)
 
+    def __init__(self) -> None:
+        self.whitelist = Whitelist()
+
+    def configure(self, settings: AnalyzerSettings) -> None:
+        # whitelist.json "allowed_secrets": regexes for known non-secret values
+        # (test fixtures, public sample keys). Suppressed, not made safe.
+        self.whitelist = settings.whitelist
+
     def check(self, node: ast.AST, context: AnalysisContext) -> Iterator[Finding]:
         if isinstance(node, ast.Constant):
             yield from self._check_known_format(node, context)
@@ -135,7 +148,7 @@ class HardcodedSecretRule(SecurityRule):
         if not isinstance(node.value, str):
             return
         known = match_known_format(node.value)
-        if known is None:
+        if known is None or self.whitelist.is_secret_allowed(node.value):
             return
         description, severity = known
         yield self.create_finding(
@@ -151,6 +164,8 @@ class HardcodedSecretRule(SecurityRule):
         secret = value.value
         # Values with a known format are reported by _check_known_format already.
         if not is_secret_name(name) or is_placeholder(secret) or match_known_format(secret):
+            return
+        if self.whitelist.is_secret_allowed(secret):
             return
         code = self._masked_line(value, secret, context)
         if len(secret) >= HIGH_ENTROPY_MIN_LENGTH and shannon_entropy(secret) >= HIGH_ENTROPY_THRESHOLD:

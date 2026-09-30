@@ -12,7 +12,9 @@ VULNERABLE = "dangerous_demo('x')\n"
 @pytest.fixture(autouse=True)
 def use_demo_rules(monkeypatch, demo_registry):
     """Run the CLI with the demo rule and without writing log files."""
-    monkeypatch.setattr(cli, "AnalyzerEngine", lambda: AnalyzerEngine(registry=demo_registry))
+    monkeypatch.setattr(
+        cli, "AnalyzerEngine", lambda settings=None: AnalyzerEngine(registry=demo_registry, settings=settings),
+    )
     monkeypatch.setattr(cli, "load_builtin_rules", lambda: demo_registry)
     monkeypatch.setattr(cli, "setup_logging", lambda: None)
 

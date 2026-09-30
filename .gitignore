@@ -5,10 +5,11 @@ venv/
 env/
 .pytest_cache/
 .mypy_cache/
-logs/
-.tmp/
-reports/output/
-uploads/
 *.egg-info/
 .idea/
 .vscode/
+
+# Runtime data (inside the project, never committed)
+logs/
+.tmp/
+data/

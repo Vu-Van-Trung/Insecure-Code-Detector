@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-9">
+    <h1 class="h3 mb-1">Secure Code Analyzer</h1>
+    <p class="text-secondary">
+      Detect insecure coding patterns in <strong>Python, Java and C#</strong> source code using syntax-tree
+      analysis, a rule engine ({{ rule_count }} rules) and basic taint tracking.
+    </p>
+
+    {% if error %}
+    <div class="alert alert-danger" role="alert"><i class="bi bi-exclamation-triangle"></i> {{ error }}</div>
+    {% endif %}
+
+    <form id="scan-form" class="card shadow-sm" action="/scan" method="post" enctype="multipart/form-data"
+          data-max-file-kb="{{ limits.max_file_kb }}" data-extensions="{{ limits.extensions|replace(' ', '') }}" data-max-files="{{ limits.max_files }}">
+      <div class="card-header">
+        <ul class="nav nav-tabs card-header-tabs" role="tablist">
+          <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button" role="tab">
+              <i class="bi bi-upload"></i> Upload Source File</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-paste" type="button" role="tab">
+              <i class="bi bi-code-slash"></i> Paste Code</button>
+          </li>
+        </ul>
+      </div>
+      <div class="card-body tab-content">
+        <div class="tab-pane fade show active" id="tab-upload" role="tabpanel">
+          <label for="files" class="form-label">Source files (Python, Java, C#)</label>
+          <input class="form-control" type="file" id="files" name="files" accept="{{ limits.extensions|replace(' ', '') }}" multiple>
+          <div class="form-text">
+            Up to {{ limits.max_files }} files, {{ limits.max_file_kb }} KB each. Accepted: <code>{{ limits.extensions }}</code>.
+          </div>
+          <ul id="file-list" class="list-unstyled small mt-2 mb-0"></ul>
+        </div>
+        <div class="tab-pane fade" id="tab-paste" role="tabpanel">
+          <div class="row g-2 mb-2">
+            <div class="col-sm-4">
+              <label for="language" class="form-label">Language</label>
+              <select class="form-select form-select-sm" id="language" name="language">
+                <option value="python" selected>Python</option>
+                <option value="java">Java</option>
+                <option value="csharp">C#</option>
+              </select>
+            </div>
+            <div class="col-sm-8">
+              <label for="filename" class="form-label">File name</label>
+              <input class="form-control form-control-sm" id="filename" name="filename" value="pasted_code.py" maxlength="100">
+            </div>
+          </div>
+          <label for="code" class="form-label">Source code</label>
+          <textarea class="form-control font-monospace code-input" id="code" name="code" rows="14"
+                    spellcheck="false" placeholder="import os&#10;command = input('Command: ')&#10;os.system(command)">{{ code or "" }}</textarea>
+        </div>
+        <div id="client-error" class="alert alert-warning mt-3 d-none" role="alert"></div>
+      </div>
+      <div class="card-footer d-flex justify-content-between align-items-center">
+        <span class="small text-secondary"><i class="bi bi-info-circle"></i>
+          The code is parsed as text/AST only. It is not executed or saved as a file.</span>
+        <button class="btn btn-primary" type="submit" id="scan-button"><i class="bi bi-search"></i> Start Scan</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

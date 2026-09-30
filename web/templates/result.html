@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Scan result - Secure Code Analyzer{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+  <div>
+    <h1 class="h4 mb-0">Scan result</h1>
+    <div class="small text-secondary">{{ result.target }} &middot; {{ result.started_at }} &middot; {{ result.duration_ms }} ms</div>
+  </div>
+  <div class="btn-group" role="group" aria-label="Export report">
+    <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.json"><i class="bi bi-filetype-json"></i> JSON</a>
+    <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.csv"><i class="bi bi-filetype-csv"></i> CSV</a>
+    <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.html"><i class="bi bi-filetype-html"></i> HTML</a>
+    <a class="btn btn-primary btn-sm" href="/"><i class="bi bi-plus-lg"></i> New scan</a>
+  </div>
+</div>
+
+{% for error in result.errors %}
+<div class="alert alert-danger">
+  <strong>Scan failed: {{ error.file }}</strong> <span class="badge text-bg-danger">{{ error.error_type }}</span><br>
+  Reason: {{ error.reason }}
+  {% if error.line %}<br>Line: {{ error.line }}{% endif %}
+</div>
+{% endfor %}
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-7">
+    <div class="row row-cols-2 row-cols-md-4 g-2">
+      {% for label, value in [("Files Scanned", summary.files_scanned), ("Lines Scanned", summary.lines_scanned),
+                              ("Total Findings", summary.total_findings), ("Suppressed", summary.suppressed)] %}
+      <div class="col"><div class="card stat h-100"><div class="card-body">
+        <div class="stat-value">{{ value }}</div><div class="stat-label">{{ label }}</div>
+      </div></div></div>
+      {% endfor %}
+      {% for severity in severities %}
+      <div class="col"><div class="card stat h-100 sev-border-{{ severity|lower }}"><div class="card-body">
+        <div class="stat-value">{{ counts[severity] }}</div><div class="stat-label">{{ severity|title }}</div>
+      </div></div></div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card h-100"><div class="card-body">
+      <h2 class="h6">Findings by severity</h2>
+      {% if summary.total_findings %}
+      <div class="chart-box"><canvas id="severity-chart" data-counts='{{ counts|tojson }}' aria-label="Findings by severity chart" role="img"></canvas></div>
+      {% else %}
+      <p class="text-success mb-0"><i class="bi bi-check-circle"></i> No findings.</p>
+      {% endif %}
+    </div></div>
+  </div>
+</div>
+
+{% if result.findings %}
+<div class="card">
+  <div class="card-header d-flex flex-wrap gap-2 align-items-center">
+    <strong class="me-auto">Findings</strong>
+    <div class="btn-group btn-group-sm" role="group" aria-label="Filter by severity" id="severity-filter">
+      <button type="button" class="btn btn-outline-secondary active" data-severity="ALL">All</button>
+      {% for severity in severities %}{% if counts[severity] %}
+      <button type="button" class="btn btn-outline-secondary" data-severity="{{ severity }}">{{ severity|title }}</button>
+      {% endif %}{% endfor %}
+    </div>
+    <input type="search" id="finding-search" class="form-control form-control-sm w-auto" placeholder="Search..." aria-label="Search findings">
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0 findings-table">
+      <thead><tr><th>Severity</th><th>Lang</th><th>Rule</th><th>Location</th><th>Message</th><th>Confidence</th></tr></thead>
+      <tbody>
+      {% for f in result.findings %}
+        <tr data-severity="{{ f.severity.value }}" data-href="/scan/{{ scan_id }}/finding/{{ loop.index0 }}" class="finding-row">
+          <td><span class="badge sev-{{ f.severity.value|lower }}">{{ f.severity.value }}</span></td>
+          <td><span class="badge text-bg-light border">{{ language_names.get(f.language, f.language) }}</span></td>
+          <td class="text-nowrap"><a href="/scan/{{ scan_id }}/finding/{{ loop.index0 }}">{{ f.rule_id }}</a><div class="small text-secondary">{{ f.cwe }}</div></td>
+          <td class="small text-nowrap">{{ f.file }}:{{ f.line }}</td>
+          <td>{{ f.message }}{% if f.taint_path %}<div class="small text-secondary font-monospace">{{ f.taint_path|join(" → ") }}</div>{% endif %}</td>
+          <td>{{ (f.confidence * 100)|round|int }}%</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if result.suppressed %}
+<details class="mt-3">
+  <summary class="text-secondary">{{ result.suppressed|length }} suppressed finding(s) &ndash; hidden by whitelist / analyzer-ignore (suppression does not make code safe)</summary>
+  <ul class="small mt-2">
+    {% for f in result.suppressed %}<li>{{ f.rule_id }} {{ f.file }}:{{ f.line }} &ndash; {{ f.message }}</li>{% endfor %}
+  </ul>
+</details>
+{% endif %}
+
+<p class="small text-secondary mt-3">
+  Confidence is the analyzer's heuristic certainty, not an exact probability. Static analysis may miss
+  issues or report false positives &ndash; review each finding.
+</p>
+{% endblock %}
+{% block scripts %}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>{% endblock %}

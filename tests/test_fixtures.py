@@ -1,7 +1,8 @@
 """End-to-end check of the fixture files in tests/vulnerable and tests/safe.
 
 Each line expected to be reported carries a ``# expect: PY001`` marker
-(comma-separated for several rules). The analyzer must report exactly those
+(``// expect: JV001`` in Java/C#; comma-separated for several rules).
+The analyzer must report exactly those
 (rule, line) pairs: nothing missing (false negatives) and nothing extra
 (false positives).
 """
@@ -11,8 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from app.models.finding import Severity
+
 FIXTURES = Path(__file__).parent
-EXPECT_MARKER = re.compile(r"#\s*expect:\s*([A-Z0-9, ]+)")
+EXPECT_MARKER = re.compile(r"(?:#|//)\s*expect:\s*([A-Z0-9, ]+)")
+EXTENSIONS = (".py", ".java", ".cs")
 
 
 def expected_findings(path: Path) -> set[tuple[str, int]]:
@@ -24,8 +28,8 @@ def expected_findings(path: Path) -> set[tuple[str, int]]:
     return expected
 
 
-VULNERABLE_FILES = sorted((FIXTURES / "vulnerable").glob("*.py"))
-SAFE_FILES = sorted((FIXTURES / "safe").glob("*.py"))
+VULNERABLE_FILES = sorted(p for p in (FIXTURES / "vulnerable").iterdir() if p.suffix in EXTENSIONS)
+SAFE_FILES = sorted(p for p in (FIXTURES / "safe").iterdir() if p.suffix in EXTENSIONS)
 
 
 @pytest.mark.parametrize("path", VULNERABLE_FILES, ids=lambda p: p.name)
@@ -39,9 +43,10 @@ def test_vulnerable_fixture_reports_exactly_expected_findings(engine, path):
 
 @pytest.mark.parametrize("path", SAFE_FILES, ids=lambda p: p.name)
 def test_safe_fixture_has_no_findings(engine, path):
+    """INFO notes (e.g. PY013 'import pickle') are allowed: they ask for review, not a fix."""
     result = engine.scan_path(path)
     assert result.errors == []
-    assert result.findings == []
+    assert [f for f in result.findings if f.severity is not Severity.INFO] == []
 
 
 def test_every_vulnerable_fixture_has_a_safe_counterpart():

@@ -73,20 +73,15 @@ def parse_bytes(data: bytes, filename: str = "<input>") -> ParsedSource:
     return parse_source(decode_source(data), filename)
 
 
-def parse_file(
-    path: Path,
-    display_name: str | None = None,
-    max_file_size: int = DEFAULT_MAX_FILE_SIZE,
-) -> ParsedSource:
-    """Read and parse a file from disk, translating OS errors into SourceError."""
-    name = display_name or str(path)
+def read_source_file(path: Path, max_file_size: int = DEFAULT_MAX_FILE_SIZE) -> bytes:
+    """Read a source file (any language), translating OS errors into SourceError."""
     try:
         size = path.stat().st_size
         if size > max_file_size:
             raise SourceError(
                 "FileTooLarge", f"File is {size} bytes, limit is {max_file_size} bytes"
             )
-        data = path.read_bytes()
+        return path.read_bytes()
     except FileNotFoundError as exc:
         raise SourceError("FileNotFoundError", "File not found") from exc
     except PermissionError as exc:
@@ -95,4 +90,20 @@ def parse_file(
         raise SourceError("IsADirectoryError", "Expected a file, got a directory") from exc
     except OSError as exc:
         raise SourceError("OSError", f"Cannot read file: {exc.strerror or exc}") from exc
-    return parse_bytes(data, name)
+
+
+def decode_text(data: bytes) -> str:
+    """Decode Java/C# source: UTF-8 (with or without BOM)."""
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise SourceError("UnicodeDecodeError", f"Cannot decode source as UTF-8: {exc.reason}") from exc
+
+
+def parse_file(
+    path: Path,
+    display_name: str | None = None,
+    max_file_size: int = DEFAULT_MAX_FILE_SIZE,
+) -> ParsedSource:
+    """Read and parse a Python file from disk."""
+    return parse_bytes(read_source_file(path, max_file_size), display_name or str(path))

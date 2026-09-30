@@ -26,9 +26,9 @@ _SQL_SINK_METHODS = frozenset({"execute", "executemany", "executescript", "raw",
 # Wrappers that turn a string into a query object without escaping anything.
 _QUERY_WRAPPERS = frozenset({"sqlalchemy.text", "sqlalchemy.sql.text", "sqlalchemy.sql.expression.text"})
 # Receiver names that make it likely the call really targets a database.
-_DB_RECEIVER_WORDS = frozenset({"cursor", "cur", "conn", "connection", "db", "database", "session", "engine", "sqlite", "pd"})
+DB_RECEIVER_WORDS = frozenset({"cursor", "cur", "conn", "connection", "db", "database", "session", "engine", "sqlite", "pd"})
 
-_SQL_KEYWORDS = re.compile(
+SQL_KEYWORDS = re.compile(
     r"\b(select|insert|update|delete|replace|create|drop|alter|truncate|where|from|into|values|union|join)\b",
     re.IGNORECASE,
 )
@@ -108,7 +108,7 @@ class SqlInjectionRule(SecurityRule):
         built_at, literal_parts = self._find_unsafe_build(query, node, context)
         if built_at is None:
             return
-        looks_like_sql = bool(_SQL_KEYWORDS.search(" ".join(literal_parts)))
+        looks_like_sql = bool(SQL_KEYWORDS.search(" ".join(literal_parts)))
         if not looks_like_sql and not self._db_receiver(node.func.value):
             return
 
@@ -157,4 +157,4 @@ class SqlInjectionRule(SecurityRule):
         if not name:
             return False
         words = split_identifier(name.rsplit(".", 1)[-1])
-        return any(word in _DB_RECEIVER_WORDS for word in words)
+        return any(word in DB_RECEIVER_WORDS for word in words)

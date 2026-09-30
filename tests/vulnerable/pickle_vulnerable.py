@@ -1,5 +1,5 @@
 """Intentionally vulnerable test fixture: PY005. Never run this file."""
-import pickle
+import pickle  # expect: PY013
 
 import pandas as pd
 

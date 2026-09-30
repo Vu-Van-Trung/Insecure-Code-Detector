@@ -48,10 +48,15 @@ class RuleRegistry:
     def rule_ids(self) -> list[str]:
         return sorted(self._rules)
 
-    def create_rules(self, disabled: set[str] | frozenset[str] = frozenset()) -> list[SecurityRule]:
-        """Instantiate every enabled rule, ordered by id."""
+    def create_rules(
+        self, disabled: set[str] | frozenset[str] = frozenset(), language: str | None = None,
+    ) -> list[SecurityRule]:
+        """Instantiate every enabled rule (of one language, if given), ordered by id."""
         disabled_upper = {rule_id.upper() for rule_id in disabled}
-        return [self._rules[rule_id]() for rule_id in self.rule_ids() if rule_id not in disabled_upper]
+        return [
+            self._rules[rule_id]() for rule_id in self.rule_ids()
+            if rule_id not in disabled_upper and (language is None or self._rules[rule_id].language == language)
+        ]
 
     def __contains__(self, rule_id: object) -> bool:
         return isinstance(rule_id, str) and rule_id.upper() in self._rules

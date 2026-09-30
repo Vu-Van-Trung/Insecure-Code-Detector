@@ -9,3 +9,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 # Keep temporary test files inside the project (not in the system %TEMP%).
 addopts = "--basetemp=.tmp/pytest"
+filterwarnings = [
+    # starlette's TestClient suggests httpx2; httpx works fine for these tests.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

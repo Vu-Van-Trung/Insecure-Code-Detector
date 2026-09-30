@@ -11,6 +11,7 @@ from app.analyzer.engine import AnalyzerEngine
 from app.analyzer.taint import STATIC, TaintConfig, TaintInfo, analyze_taint
 from app.analyzer.utils import collect_imports
 from app.config.loader import ConfigError
+from app.config.settings import AnalyzerSettings
 from app.models.finding import Severity
 
 DEFAULT_CONFIG = TaintConfig.load()
@@ -363,14 +364,14 @@ def test_default_config_contains_spec_sources_and_sanitizer():
 def test_custom_config_file_is_used_by_engine(tmp_path):
     path = tmp_path / "taint.json"
     path.write_text(json.dumps({"sources": {"functions": ["read_secret_input"]}}), encoding="utf-8")
-    engine = AnalyzerEngine(taint_config=TaintConfig.load(path))
+    engine = AnalyzerEngine(settings=AnalyzerSettings.load(taint_config=TaintConfig.load(path)))
     result = engine.scan_source("import os\nos.system(read_secret_input())")
     [finding] = result.findings
     assert finding.source == "read_secret_input()"
 
 
 def test_cli_reports_invalid_configuration(monkeypatch, tmp_path, capsys):
-    def broken_engine():
+    def broken_engine(**kwargs):
         raise ConfigError("taint.json: bad")
 
     monkeypatch.setattr(cli, "AnalyzerEngine", broken_engine)
