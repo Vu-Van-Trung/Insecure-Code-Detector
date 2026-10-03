@@ -1,8 +1,8 @@
-"""PY012 / PY013 - functions and modules listed in blacklist.json.
+"""PY012 / PY013 - Hàm và module được liệt kê trong blacklist.json.
 
-These generic rules let users flag additional APIs without writing code. When a
-specific rule (e.g. PY001 for eval) reports the same location, the engine drops
-the generic duplicate.
+Các rule "chung" (generic) này cho phép người dùng đánh dấu thêm API nguy hiểm
+mà không cần viết code. Khi một rule chuyên biệt (vd PY001 cho eval) đã báo
+cùng vị trí, engine bỏ bản trùng của rule chung.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from app.analyzer.context import AnalysisContext
 from app.config.settings import BlacklistEntry
 from app.models.finding import Finding, Severity
-from app.rules.base import SecurityRule
+from app.rules.base import CallRule, SecurityRule
 from app.rules.registry import register_rule
 
 if TYPE_CHECKING:
@@ -22,7 +22,9 @@ if TYPE_CHECKING:
 
 
 @register_rule
-class BlacklistedFunctionRule(SecurityRule):
+class BlacklistedFunctionRule(CallRule):
+    """PY012: lời gọi tới hàm có trong blacklist; severity/CWE lấy từ mục blacklist."""
+
     id = "PY012"
     name = "Call to blacklisted function"
     description = "The called function is listed in blacklist.json as dangerous for this project."
@@ -36,12 +38,10 @@ class BlacklistedFunctionRule(SecurityRule):
         self.entries: dict[str, BlacklistEntry] = {}
 
     def configure(self, settings: AnalyzerSettings) -> None:
+        # Danh sách hàm nạp từ blacklist.json (qua AnalyzerSettings).
         self.entries = settings.blacklist.functions
 
-    def check(self, node: ast.AST, context: AnalysisContext) -> Iterator[Finding]:
-        if not isinstance(node, ast.Call) or not self.entries:
-            return
-        name = context.call_name(node)
+    def check_call(self, node: ast.Call, name: str | None, context: AnalysisContext) -> Iterator[Finding]:
         entry = self.entries.get(name) if name else None
         if entry is None or context.is_shadowed_builtin(name):
             return
@@ -53,6 +53,8 @@ class BlacklistedFunctionRule(SecurityRule):
 
 @register_rule
 class BlacklistedModuleRule(SecurityRule):
+    """PY013: import module có trong blacklist (mặc định INFO - chỉ nhắc review)."""
+
     id = "PY013"
     name = "Import of blacklisted module"
     description = (
@@ -76,8 +78,10 @@ class BlacklistedModuleRule(SecurityRule):
         if not self.entries:
             return
         if isinstance(node, ast.Import):
+            # import a, b.c  -> ["a", "b.c"]
             modules = [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            # from x.y import z -> ["x.y"]; import tương đối (from . import) bị bỏ qua.
             modules = [node.module]
         else:
             return
@@ -90,7 +94,7 @@ class BlacklistedModuleRule(SecurityRule):
                 )
 
     def _match(self, module: str) -> BlacklistEntry | None:
-        """'xml.etree' matches an entry for 'xml' as well as 'xml.etree'."""
+        """'xml.etree' khớp với mục 'xml' cũng như mục 'xml.etree' (ưu tiên mục cụ thể nhất)."""
         parts = module.split(".")
         for i in range(len(parts), 0, -1):
             entry = self.entries.get(".".join(parts[:i]))

@@ -15,6 +15,7 @@ EXPECTED_RULES = {
     "crypto_vulnerable.py": {"PY008", "PY009", "PY010"},
     "secret_vulnerable.py": {"PY007"},
     "pickle_vulnerable.py": {"PY005", "PY006"},
+    "web_vulnerable.py": {"PY014", "PY015", "PY016", "PY017", "PY018"},
     "UserController_vulnerable.java": {"JV001", "JV002", "JV003", "JV005", "JV007", "JV008"},
     "AccountController_vulnerable.cs": {"CS001", "CS002", "CS003", "CS005", "CS008", "CS009"},
 }
@@ -50,5 +51,6 @@ def test_taint_samples_are_critical(engine):
     assert ("PY011", "request.args") in critical
     assert ("PY005", "request.cookies") in critical
     assert ("PY003", "input()") in critical
+    assert ("PY018", "request.args") in critical
     assert ("JV002", "@RequestParam") in critical
     assert ("CS001", "[FromQuery]") in critical

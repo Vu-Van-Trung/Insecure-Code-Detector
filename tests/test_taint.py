@@ -231,6 +231,51 @@ def test_sanitizers_come_from_configuration():
     assert not assert_tainted(label_at_sink(code, default_like), "read_user()").sanitized
 
 
+# =========================================================== sink-specific sanitizers
+
+
+def test_sink_sanitizer_marks_data_safe_for_its_category_only():
+    code = "import os\nname = os.path.basename(input())\nsink(name)"
+    info = assert_tainted(label_at_sink(code), "input()", ("input()", "os.path.basename()", "name"))
+    assert info.safe_for == {"path"}
+    assert not info.sanitized  # every other sink still sees plain taint
+
+
+def test_concatenation_keeps_safe_category_of_tainted_parts():
+    code = "import os\nsink('/data/' + os.path.basename(input()))"
+    assert label_at_sink(code).safe_for == {"path"}
+
+
+def test_unsafe_part_removes_safe_category():
+    code = "import os\na = input()\nsink(os.path.basename(a) + a)"
+    assert label_at_sink(code).safe_for == frozenset()
+
+
+def test_branch_merge_keeps_only_common_safe_categories():
+    code = """
+    import os, html
+    x = os.path.basename(input())
+    if cond:
+        x = html.escape(input())
+    sink(x)
+    """
+    assert label_at_sink(code).safe_for == frozenset()
+
+
+def test_sink_sanitizers_come_from_configuration():
+    config = TaintConfig(
+        source_functions=frozenset({"read_user"}), source_attributes=frozenset(), sanitizers=frozenset(),
+        sink_sanitizers={"url": frozenset({"my.allow_url"})},
+    )
+    info = label_at_sink("import my\nsink(my.allow_url(read_user()))", config)
+    assert info.safe_for == {"url"}
+
+
+def test_default_config_has_path_and_html_sink_sanitizers():
+    assert "werkzeug.utils.secure_filename" in DEFAULT_CONFIG.sink_sanitizers["path"]
+    assert "html.escape" in DEFAULT_CONFIG.sink_sanitizers["html"]
+
+
 # =========================================================== rules integration
 
 
@@ -341,6 +386,8 @@ def test_unknown_origin_keeps_phase_2_behaviour(find):
         ('{"sources": []}', "'sources'"),
         ('{"sources": {"functions": "input"}}', "'functions'"),
         ('{"sanitizers": [1]}', "'sanitizers'"),
+        ('{"sink_sanitizers": ["os.path.basename"]}', "'sink_sanitizers'"),
+        ('{"sink_sanitizers": {"path": "os.path.basename"}}', "'path'"),
     ],
 )
 def test_invalid_taint_config_raises_config_error(tmp_path, content, message):

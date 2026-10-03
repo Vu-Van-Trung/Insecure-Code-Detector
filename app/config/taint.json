@@ -33,5 +33,23 @@
         "pipes.quote",
         "int",
         "float"
-    ]
+    ],
+    "sink_sanitizers": {
+        "path": [
+            "os.path.basename",
+            "posixpath.basename",
+            "ntpath.basename",
+            "werkzeug.utils.secure_filename",
+            "werkzeug.secure_filename"
+        ],
+        "html": [
+            "html.escape",
+            "markupsafe.escape",
+            "flask.escape",
+            "jinja2.escape",
+            "django.utils.html.escape",
+            "bleach.clean"
+        ],
+        "url": []
+    }
 }

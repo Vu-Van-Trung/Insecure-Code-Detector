@@ -1,1 +1,1 @@
-"""Security rules. Every module here (except base/registry) is auto-loaded."""
+"""Các security rule. Mọi module trong package này (trừ base/registry và module bắt đầu bằng "_") được nạp tự động."""

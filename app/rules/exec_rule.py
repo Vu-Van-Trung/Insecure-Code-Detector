@@ -1,4 +1,4 @@
-"""PY002 - Dangerous use of exec()."""
+"""PY002 - Dùng exec() nguy hiểm (code injection)."""
 
 from app.models.finding import Severity
 from app.rules.base import DangerousCallRule
@@ -7,6 +7,8 @@ from app.rules.registry import register_rule
 
 @register_rule
 class ExecRule(DangerousCallRule):
+    """PY002: giống PY001 nhưng cho exec() (chạy cả câu lệnh, không chỉ biểu thức)."""
+
     id = "PY002"
     name = "Dangerous use of exec()"
     description = (

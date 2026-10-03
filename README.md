@@ -9,7 +9,7 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 
 | Ngôn ngữ | Đuôi file | Parser | Rule |
 |---|---|---|---|
-| Python | `.py` | `ast` (thư viện chuẩn) | PY001–PY013 |
+| Python | `.py` | `ast` (thư viện chuẩn) | PY001–PY018 |
 | Java | `.java` | tree-sitter-java | JV001–JV009 |
 | C# | `.cs` | tree-sitter-c-sharp | CS001–CS009 |
 
@@ -28,12 +28,14 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 
 ## 2. Tính năng
 
-- **31 security rules**: 13 cho Python, 9 cho Java, 9 cho C#; mỗi rule có severity, confidence, CWE, recommendation.
+- **36 security rules**: 18 cho Python, 9 cho Java, 9 cho C#; mỗi rule có severity, confidence, CWE, recommendation.
 - **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
   `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
 - **Taint tracking** intra-procedural cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
   (vd `@RequestParam -> name -> sql -> Statement.executeQuery()`, `[FromQuery] -> host -> Process.Start()`).
 - **Sanitizer** cấu hình được (`shlex.quote`, `int`, ...). Luồng đã sanitize vẫn được báo ở mức LOW.
+  **Sanitizer theo loại sink** (`secure_filename` cho path, `html.escape` cho HTML) chỉ làm sạch cho đúng
+  loại sink đó.
 - **Severity theo ngữ cảnh**: cùng `os.system()` nhưng `input()` → CRITICAL, hằng số → LOW.
 - **Whitelist** (file, rule, secret, comment `# analyzer-ignore`) và **Blacklist** (JSON).
 - **Web UI**: upload nhiều file `.py`/`.java`/`.cs` hoặc paste code (chọn ngôn ngữ), dashboard, biểu đồ,
@@ -41,14 +43,14 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 - **Bảo mật của chính ứng dụng**: không thực thi code upload, không ghi file upload xuống đĩa,
   chống path traversal, giới hạn kích thước/số lượng/extension, CSP, escape toàn bộ output.
 - **Logging** vào `logs/analyzer.log` (chỉ metadata, không log source code hay secret).
-- **578 unit test** (pytest).
+- **687 unit test** (pytest).
 
 ## 3. Kiến trúc
 
 ```text
                 +-------------------+      +---------------------+
   CLI  -------> |                   |      |  Rules (plugins)    |
-  (main.py)     |   AnalyzerEngine  | ---> |  PY001 ... PY013    |
+  (main.py)     |   AnalyzerEngine  | ---> |  PY001 ... PY018    |
                 |   (app/analyzer)  |      |  auto-discovered    |
   Web UI -----> |                   |      +---------------------+
   (FastAPI)     +---------+---------+
@@ -79,8 +81,8 @@ app/
   logging_config.py    Cấu hình logging
   analyzer/            parser, context, visitor, engine, taint, suppression, languages, utils
   analyzer/ts/         adapters (Java, C#), context, taint cho tree-sitter
-  rules/               base, registry, rule Python (9 file), java_rules.py, csharp_rules.py,
-                       _ts_common.py (logic chung Java/C#), _keywords.py (từ khóa dùng chung)
+  rules/               base, registry, rule Python (15 file), java_rules.py, csharp_rules.py,
+                       _ts_common.py (lớp cơ sở Java/C#), _keywords.py, _values.py (helper dùng chung)
   models/finding.py    Finding, ScanResult, Severity
   reports/             json_report, csv_report, html_report
   config/              rules.json, severity.json, taint.json (Python), taint_java.json, taint_csharp.json,
@@ -91,19 +93,43 @@ samples/               mẫu demo vulnerable/ và safe/
 whitelist.json, blacklist.json
 ```
 
-**Thêm rule mới (ví dụ PY016)**: tạo `app/rules/xxx_rule.py` chứa lớp kế thừa `SecurityRule` và gắn
+**Cây kế thừa của rule** (`app/rules/base.py`, `_ts_common.py`): logic chấm điểm theo taint
+(`tainted_finding`, `sanitized_finding`, `graded_finding`) nằm một chỗ trong `SecurityRule` và được dùng
+chung cho cả Python, Java, C#. Phần giống nhau giữa các ngôn ngữ được tách thành mixin.
+
+```text
+SecurityRule                      metadata, create_finding, tainted/sanitized/graded_finding
+├── CallRule                      chỉ xét ast.Call -> check_call(node, name, context)
+│   ├── DangerousCallRule         PY001, PY002, PY003, PY005: chỉ khai báo target_functions + message
+│   ├── TaintedSinkRule           PY014, PY015: chỉ báo khi tainted, có sanitizer theo loại sink
+│   └── PY004, PY006, PY008, PY009, PY011, PY012, PY016, PY017, PY018
+├── PY007, PY010, PY013           xét thêm node khác (Assign, Attribute, Import...)
+└── TSRule                        Java/C#: check_file(ctx)
+    ├── CommandRuleBase           JV001, CS001
+    ├── SqlRuleBase               JV002, CS002
+    ├── DeserializationRuleBase   JV003, CS003
+    ├── CodeInjectionRuleBase     JV004, CS004
+    ├── WeakAlgorithmRuleBase     JV005, JV006, CS005, CS006
+    ├── InsecureRandomRuleBase    JV007, CS007   (+ InsecureRandomMixin, dùng chung với PY009)
+    └── HardcodedSecretRuleBase   JV008, CS008   (+ HardcodedSecretMixin, dùng chung với PY007)
+```
+
+**Thêm rule mới (ví dụ PY019)**: tạo `app/rules/xxx_rule.py` chứa lớp kế thừa một lớp cơ sở ở trên và gắn
 `@register_rule`. Registry tự nạp mọi module trong `app/rules/` — **không cần sửa Analyzer Core**.
 
 ```python
 @register_rule
-class MyRule(SecurityRule):
-    id = "PY016"; name = "..."; description = "..."; severity = Severity.HIGH
+class MyRule(CallRule):
+    id = "PY019"; name = "..."; description = "..."; severity = Severity.HIGH
     cwe = "CWE-xxx"; category = "..."; recommendation = "..."
 
-    def check(self, node, context):
-        if isinstance(node, ast.Call) and context.call_name(node) == "danger.func":
+    def check_call(self, node, name, context):
+        if name == "danger.func":
             yield self.create_finding(node, context, "message", confidence=0.8)
 ```
+
+Rule chỉ cần cấm một hàm theo mức độ nguồn dữ liệu thì kế thừa `DangerousCallRule` và chỉ khai báo thuộc tính
+(xem `eval_rule.py`, chỉ ~25 dòng).
 
 ## 4. Cài đặt
 
@@ -187,6 +213,11 @@ Xem đầy đủ bằng `python main.py rules`.
 | PY011 | SQL nối chuỗi / f-string / `%` / `.format()` | HIGH | CWE-89 | tainted → CRITICAL; query tham số hóa → không báo |
 | PY012 | Hàm trong `blacklist.json` | theo blacklist | theo blacklist | bỏ khi rule chuyên biệt đã báo cùng vị trí |
 | PY013 | Import module trong `blacklist.json` | INFO | theo blacklist | nhắc review, không phải lỗ hổng |
+| PY014 | Path traversal: `open()`, `send_file`, `os.remove`, `shutil.*`, `Path(...).read_text()`, `FileStorage.save()` | HIGH | CWE-22 | chỉ báo khi tainted; `secure_filename`/`basename`, `send_from_directory` → không báo |
+| PY015 | SSRF: `requests.*`, `httpx.*`, `urlopen` với URL từ người dùng | HIGH | CWE-918 | chỉ báo khi tainted; host cố định (`https://api.x/{id}`) → MEDIUM |
+| PY016 | XXE: lxml `resolve_entities=True`/`no_network=False`, parser mặc định, `setFeature(feature_external_ges, True)` | HIGH | CWE-611 | `XMLParser()` không đặt `resolve_entities=False` → MEDIUM; `xml.etree`/`minidom` + dữ liệu tainted → MEDIUM (CWE-776); `defusedxml` → không báo |
+| PY017 | `tempfile.mktemp()`, `os.tempnam()` | MEDIUM | CWE-377 | `mkstemp`/`NamedTemporaryFile` → không báo |
+| PY018 | XSS / template injection: `render_template_string`, `Markup`/`mark_safe`, `jinja2.Environment(autoescape=False)`, HTML trả về từ dữ liệu request | HIGH | CWE-79 | template source tainted → CRITICAL (CWE-1336); `escape()` trước khi ghép HTML → không báo |
 
 ### Java và C#
 
@@ -285,12 +316,17 @@ Sources và sanitizers khai báo trong `app/config/taint.json` (Python), `taint_
         "functions": ["input", "os.getenv", "sys.stdin.read", "request.get_json"],
         "attributes": ["request.args", "request.form", "request.json", "request.cookies", "sys.argv", "os.environ"]
     },
-    "sanitizers": ["shlex.quote", "int", "float"]
+    "sanitizers": ["shlex.quote", "int", "float"],
+    "sink_sanitizers": {
+        "path": ["os.path.basename", "werkzeug.utils.secure_filename"],
+        "html": ["html.escape", "markupsafe.escape"],
+        "url": []
+    }
 }
 ```
 
-Sinks là argument nguy hiểm của các rule PY001–PY005 và PY011 (`eval`, `exec`, `os.system`,
-`subprocess.*`, `pickle.loads`, `cursor.execute`, ...). Mỗi biểu thức được gắn một nhãn:
+Sinks là argument nguy hiểm của các rule PY001–PY005, PY011 và PY014–PY018 (`eval`, `exec`, `os.system`,
+`subprocess.*`, `pickle.loads`, `cursor.execute`, `open`, `requests.get`, `render_template_string`, ...). Mỗi biểu thức được gắn một nhãn:
 
 - **TAINTED** — chứa dữ liệu từ source (lưu source và đường đi qua các biến);
 - **STATIC** — cố định trong code (`cmd = "ls"; os.system(cmd)` → LOW);
@@ -328,16 +364,21 @@ list/dict, comprehension, `for`, `with`, unpack tuple, `+=`, `self.x`. Phép gá
 *"the analyzer cannot prove this sanitizer is sufficient"* — vì công cụ không chứng minh được sanitizer
 phù hợp với sink (vd `shlex.quote` không chống được SQL injection).
 
+**Sanitizer theo loại sink** (`sink_sanitizers`): hàm chỉ làm sạch dữ liệu cho một loại sink. Ví dụ
+`os.path.basename(input())` an toàn cho `open()` (PY014 không báo) nhưng `os.system("cat " + name)` vẫn là
+CRITICAL (PY003). Khi ghép nhiều phần, kết quả chỉ an toàn nếu mọi phần tainted đều an toàn.
+`html.escape` không được chấp nhận cho template source (PY018), vì `{{ 7*7 }}` không chứa ký tự HTML.
+
 ## 11. Testing
 
 ```powershell
-python -m pytest -q                     # toàn bộ 578 test
+python -m pytest -q                     # toàn bộ 687 test
 python -m pytest tests/test_taint.py -v # một nhóm
 ```
 
 | Nhóm | File |
 |---|---|
-| Rule Python (vulnerable / safe / false positive) | `test_eval.py`, `test_exec.py`, `test_command.py`, `test_pickle.py`, `test_yaml.py`, `test_secret.py`, `test_crypto.py`, `test_requests.py`, `test_sql.py` |
+| Rule Python (vulnerable / safe / false positive) | `test_eval.py`, `test_exec.py`, `test_command.py`, `test_pickle.py`, `test_yaml.py`, `test_secret.py`, `test_crypto.py`, `test_requests.py`, `test_sql.py`, `test_path.py`, `test_ssrf.py`, `test_xml.py`, `test_tempfile.py`, `test_xss.py` |
 | Rule Java / C# (kèm taint) | `test_java.py`, `test_csharp.py` |
 | Taint tracking | `test_taint.py` |
 | Whitelist / Blacklist / Severity | `test_whitelist.py`, `test_blacklist.py`, `test_severity.py` |
@@ -395,6 +436,11 @@ triển khai chúng. Mọi secret trong đó là giá trị giả.
 - Chỉ nhận diện API theo tên đầy đủ; đối tượng mà kiểu không suy ra được (vd `session.get(..., verify=False)`)
   được xử lý bằng heuristic với confidence thấp hơn.
 - PY007 dựa vào tên biến và entropy nên vẫn có thể bỏ sót hoặc báo nhầm.
+- PY014/PY015 chỉ báo khi chứng minh được dữ liệu đến từ source (đường dẫn/URL không rõ nguồn quá phổ biến).
+  Kiểm tra kiểu `Path(base, name).resolve().is_relative_to(base)` hay allowlist host không được nhận diện là
+  sanitizer — dùng `# analyzer-ignore: PY014` sau khi review. Method của đối tượng không suy ra được kiểu
+  (`requests.Session().get(url)`) không được kiểm tra.
+- PY018 chỉ phân tích code Python; không đọc file template (`{{ x|safe }}`, `{% autoescape false %}`).
 - Java/C#: không phân giải kiểu đầy đủ như trình biên dịch (không đọc `import`/`using` hay thư viện);
   kiểu của biến được suy từ khai báo và `new T()`, nên đối tượng truyền qua nhiều lớp có thể bị bỏ sót.
   Không phân tích lambda, generic phức tạp, LINQ, annotation cấu hình (Spring Security...).
@@ -408,9 +454,9 @@ triển khai chúng. Mọi secret trong đó là giá trị giả.
 - Phân tích liên hàm và giữa các module (call graph), phân tích path-sensitive.
 - Thêm ngôn ngữ khác qua tree-sitter (JavaScript/TypeScript, PHP, Go): chỉ cần một adapter và bộ rule mới.
 - Phân giải kiểu Java/C# đầy đủ hơn (đọc `import`/`using`, kiểu trả về của method).
-- Sanitizer theo loại sink (command / SQL / HTML).
-- Thêm rule: XSS trong template, path traversal (`open(request.args[...])`), SSRF, XXE, `tempfile.mktemp`,
-  JWT không verify, `assert` dùng cho kiểm tra bảo mật.
+- Mở rộng sanitizer theo loại sink cho command / SQL (hiện có path / HTML / URL).
+- Thêm rule: JWT không verify, `assert` dùng cho kiểm tra bảo mật, zip slip (`extractall`), open redirect;
+  quét file template Jinja2/Django (`|safe`, `autoescape false`).
 - Output SARIF để tích hợp GitHub Code Scanning; pre-commit hook.
 - Lưu lịch sử scan bằng SQLite + SQLAlchemy, so sánh giữa các lần scan.
 - Xuất PDF; tự host Bootstrap/Chart.js kèm Subresource Integrity để chạy offline.

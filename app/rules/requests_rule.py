@@ -1,4 +1,4 @@
-"""PY010 - TLS certificate verification disabled."""
+"""PY010 - Tắt kiểm tra chứng chỉ TLS (verify=False, ssl.CERT_NONE)."""
 
 from __future__ import annotations
 
@@ -11,16 +11,19 @@ from app.models.finding import Finding, Severity
 from app.rules.base import SecurityRule
 from app.rules.registry import register_rule
 
-# HTTP client libraries whose functions/classes accept verify=.
+# Thư viện HTTP client mà hàm/class của chúng nhận tham số verify=.
 _HTTP_LIBRARIES = ("requests.", "httpx.")
-# Method names of session/client objects (e.g. session.get(url, verify=False)),
-# where the receiver's type cannot be resolved statically.
+# Tên method của đối tượng session/client (vd session.get(url, verify=False)),
+# khi không suy ra được kiểu của đối tượng bằng phân tích tĩnh.
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "request", "send"})
+# Hàm tạo SSL context không kiểm tra chứng chỉ.
 _UNVERIFIED_CONTEXT = frozenset({"ssl._create_unverified_context", "ssl._create_stdlib_context"})
 
 
 @register_rule
 class TlsVerificationDisabledRule(SecurityRule):
+    """PY010 kế thừa thẳng SecurityRule (không phải CallRule) vì còn xét node Attribute/Name (ssl.CERT_NONE)."""
+
     id = "PY010"
     name = "TLS certificate verification disabled"
     description = (
@@ -40,8 +43,9 @@ class TlsVerificationDisabledRule(SecurityRule):
     def check(self, node: ast.AST, context: AnalysisContext) -> Iterator[Finding]:
         if isinstance(node, ast.Call):
             yield from self._check_call(node, context)
+        # Chỉ xét khi ĐỌC giá trị (Load), không xét khi gán vào tên CERT_NONE.
         elif isinstance(node.ctx, ast.Load) and context.resolve(node) == "ssl.CERT_NONE":
-            # e.g. ctx.verify_mode = ssl.CERT_NONE
+            # vd ctx.verify_mode = ssl.CERT_NONE
             yield self.create_finding(
                 node, context, "ssl.CERT_NONE disables certificate verification.", confidence=0.8,
             )
@@ -56,8 +60,8 @@ class TlsVerificationDisabledRule(SecurityRule):
             return
 
         verify = get_keyword(node, "verify")
-        # Only a literal False/0 is reported. verify='ca.pem' is correct usage and
-        # verify=None means "use the default" (verification on) in requests.
+        # Chỉ báo khi là hằng False/0. verify='ca.pem' là cách dùng đúng và
+        # verify=None nghĩa là "dùng mặc định" (vẫn kiểm tra) trong requests.
         if verify is None or not isinstance(verify.value, ast.Constant):
             return
         if verify.value.value is None or verify.value.value not in (False, 0):
@@ -67,7 +71,7 @@ class TlsVerificationDisabledRule(SecurityRule):
                 node, context, f"{name}() is called with verify=False.", confidence=0.9,
             )
         elif isinstance(node.func, ast.Attribute) and node.func.attr in _HTTP_METHODS:
-            # Probably a requests.Session / httpx.Client method; type not provable.
+            # Có lẽ là method của requests.Session / httpx.Client; không chứng minh được kiểu.
             yield self.create_finding(
                 node, context, f".{node.func.attr}() is called with verify=False.", confidence=0.7,
             )

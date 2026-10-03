@@ -1,7 +1,8 @@
-"""Safe source loading and AST parsing.
+"""Đọc mã nguồn an toàn và parse thành AST.
 
-SECURITY: source code is only ever read as text and parsed with ``ast.parse``.
-It is never imported, compiled for execution, or run.
+BẢO MẬT: mã nguồn chỉ được đọc như VĂN BẢN và parse bằng ``ast.parse``.
+Nó không bao giờ được import, compile để thực thi hay chạy. Vì vậy scan một
+file độc hại (vd chứa ``os.system("rm -rf /")``) không gây hại cho máy scan.
 """
 
 from __future__ import annotations
@@ -12,23 +13,27 @@ import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
-# Files larger than this are rejected to avoid excessive memory/CPU usage.
+# File lớn hơn giới hạn này bị từ chối để tránh tốn quá nhiều bộ nhớ/CPU
+# (vd ai đó upload file vài trăm MB để làm treo server).
 DEFAULT_MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 MiB
 
 
 class SourceError(Exception):
-    """Raised when a source file cannot be read or parsed."""
+    """Lỗi khi không đọc hoặc không parse được file nguồn.
+
+    Engine bắt lỗi này và chuyển thành ScanError trong report, thay vì dừng cả lần scan.
+    """
 
     def __init__(self, error_type: str, reason: str, line: int | None = None) -> None:
         super().__init__(reason)
-        self.error_type = error_type
-        self.reason = reason
-        self.line = line
+        self.error_type = error_type  # vd "SyntaxError", "FileTooLarge"
+        self.reason = reason          # mô tả cho người dùng
+        self.line = line              # dòng gây lỗi, nếu biết
 
 
 @dataclass
 class ParsedSource:
-    """Source text together with its AST."""
+    """Văn bản mã nguồn cùng với cây AST của nó."""
 
     filename: str
     source: str
@@ -36,6 +41,7 @@ class ParsedSource:
 
     @property
     def lines(self) -> list[str]:
+        """Các dòng của file (rule dùng để lấy đoạn code hiển thị trong finding)."""
         return self.source.splitlines()
 
     @property
@@ -44,38 +50,43 @@ class ParsedSource:
 
 
 def decode_source(data: bytes) -> str:
-    """Decode bytes using the PEP 263 encoding declaration (default UTF-8)."""
+    """Giải mã bytes theo khai báo encoding PEP 263 (``# -*- coding: ... -*-``), mặc định UTF-8.
+
+    Dùng đúng cách Python tự đọc file .py, nên file khai báo latin-1 vẫn được đọc đúng.
+    """
     try:
         encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
         return data.decode(encoding)
     except (SyntaxError, LookupError) as exc:
-        # detect_encoding raises SyntaxError for invalid/unknown coding cookies.
+        # detect_encoding ném SyntaxError khi khai báo coding sai hoặc không tồn tại.
         raise SourceError("UnicodeDecodeError", f"Invalid source encoding: {exc}") from exc
     except UnicodeDecodeError as exc:
         raise SourceError("UnicodeDecodeError", f"Cannot decode source: {exc.reason}") from exc
 
 
 def parse_source(source: str, filename: str = "<input>") -> ParsedSource:
-    """Parse Python source text into an AST without executing it."""
+    """Parse văn bản Python thành AST mà không thực thi nó."""
     try:
         tree = ast.parse(source, filename=filename, type_comments=False)
     except SyntaxError as exc:
         reason = f"Python SyntaxError: {exc.msg}"
         raise SourceError("SyntaxError", reason, exc.lineno) from exc
     except (ValueError, RecursionError, MemoryError) as exc:
-        # ValueError: null bytes in source; RecursionError: pathologically nested code.
+        # ValueError: mã nguồn chứa byte null; RecursionError: code lồng nhau quá sâu bất thường
+        # (có thể là file cố tình tạo ra để làm sập parser).
         raise SourceError(type(exc).__name__, f"Cannot parse source: {exc}") from exc
     return ParsedSource(filename=filename, source=source, tree=tree)
 
 
 def parse_bytes(data: bytes, filename: str = "<input>") -> ParsedSource:
-    """Decode then parse raw bytes (used for uploads and files)."""
+    """Giải mã rồi parse bytes thô (dùng cho file upload và file trên đĩa)."""
     return parse_source(decode_source(data), filename)
 
 
 def read_source_file(path: Path, max_file_size: int = DEFAULT_MAX_FILE_SIZE) -> bytes:
-    """Read a source file (any language), translating OS errors into SourceError."""
+    """Đọc một file nguồn (mọi ngôn ngữ); lỗi hệ điều hành được chuyển thành SourceError."""
     try:
+        # Kiểm tra kích thước TRƯỚC khi đọc, để không nạp file khổng lồ vào bộ nhớ.
         size = path.stat().st_size
         if size > max_file_size:
             raise SourceError(
@@ -93,7 +104,7 @@ def read_source_file(path: Path, max_file_size: int = DEFAULT_MAX_FILE_SIZE) -> 
 
 
 def decode_text(data: bytes) -> str:
-    """Decode Java/C# source: UTF-8 (with or without BOM)."""
+    """Giải mã mã nguồn Java/C#: UTF-8 (có hoặc không có BOM - Visual Studio hay thêm BOM)."""
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
@@ -105,5 +116,8 @@ def parse_file(
     display_name: str | None = None,
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
 ) -> ParsedSource:
-    """Read and parse a Python file from disk."""
+    """Đọc và parse một file Python trên đĩa.
+
+    ``display_name`` là tên hiển thị trong report (vd đường dẫn tương đối thay vì tuyệt đối).
+    """
     return parse_bytes(read_source_file(path, max_file_size), display_name or str(path))

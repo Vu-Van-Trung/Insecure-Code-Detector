@@ -1,5 +1,5 @@
-"""Java and C# analysis on top of tree-sitter syntax trees.
+"""Phân tích Java và C# dựa trên cây cú pháp của tree-sitter.
 
-tree-sitter is imported lazily, so the Python analyzer keeps working even when
-the tree-sitter packages are not installed.
+tree-sitter chỉ được import khi thật sự cần (lazy import), nên phần phân tích
+Python vẫn chạy bình thường kể cả khi máy chưa cài các gói tree-sitter.
 """

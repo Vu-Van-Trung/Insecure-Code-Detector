@@ -1,4 +1,4 @@
-"""AST helper functions shared by the analyzer and the rules."""
+"""Các hàm tiện ích về AST dùng chung cho analyzer và các rule."""
 
 from __future__ import annotations
 
@@ -7,12 +7,17 @@ import re
 from collections.abc import Iterator
 
 
-# Nodes that open a new variable scope.
+# Các node mở ra một phạm vi biến (scope) mới: biến khai báo bên trong không thấy được từ bên ngoài.
 SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
 
 def walk_scope(scope: ast.AST) -> Iterator[ast.AST]:
-    """Like ast.walk, but does not descend into nested functions or classes."""
+    """Giống ``ast.walk`` nhưng không đi vào hàm hay class lồng bên trong.
+
+    Dùng khi chỉ cần các câu lệnh của đúng một hàm, vd tìm phép gán biến
+    ``query`` trong hàm hiện tại mà không lẫn với biến cùng tên ở hàm con.
+    """
+    # Duyệt bằng stack (không đệ quy) để code lồng rất sâu không gây RecursionError.
     stack = list(ast.iter_child_nodes(scope))
     while stack:
         node = stack.pop()
@@ -22,9 +27,9 @@ def walk_scope(scope: ast.AST) -> Iterator[ast.AST]:
 
 
 def collect_imports(tree: ast.AST) -> dict[str, str]:
-    """Map every locally bound import name to its fully qualified name.
+    """Ánh xạ mọi tên được import trong file sang tên đầy đủ (fully qualified name).
 
-    Examples::
+    Ví dụ::
 
         import os                      -> {"os": "os"}
         import subprocess as sp        -> {"sp": "subprocess"}
@@ -32,8 +37,8 @@ def collect_imports(tree: ast.AST) -> dict[str, str]:
         from os import system          -> {"system": "os.system"}
         from os import system as run   -> {"run": "os.system"}
 
-    This lets rules recognise ``sp.run(...)`` as ``subprocess.run(...)``, so an
-    alias cannot be used to hide a dangerous call.
+    Nhờ đó rule nhận ra ``sp.run(...)`` chính là ``subprocess.run(...)``, nên kẻ
+    viết code không thể dùng alias để "giấu" một lời gọi nguy hiểm.
     """
     imports: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -42,13 +47,15 @@ def collect_imports(tree: ast.AST) -> dict[str, str]:
                 if alias.asname:
                     imports[alias.asname] = alias.name
                 else:
+                    # "import os.path" chỉ tạo tên "os" trong file.
                     top_level = alias.name.split(".", 1)[0]
                     imports[top_level] = top_level
         elif isinstance(node, ast.ImportFrom):
-            # Relative imports (from . import x) refer to project code, not stdlib.
+            # Import tương đối (from . import x) trỏ tới code của chính dự án, không phải thư viện.
             if node.level or not node.module:
                 continue
             for alias in node.names:
+                # "from x import *" không cho biết tên nào được import nên bỏ qua.
                 if alias.name == "*":
                     continue
                 imports[alias.asname or alias.name] = f"{node.module}.{alias.name}"
@@ -56,11 +63,12 @@ def collect_imports(tree: ast.AST) -> dict[str, str]:
 
 
 def get_dotted_name(node: ast.AST) -> str | None:
-    """Return the raw dotted name of a Name/Attribute chain, e.g. ``os.path.join``.
+    """Tên dạng chấm (chưa giải alias) của một chuỗi Name/Attribute, vd ``os.path.join``.
 
-    Returns None for anything that is not a pure name chain, such as
-    ``get_module().system`` or ``obj[0].run``.
+    Trả None với mọi thứ không phải chuỗi tên thuần, vd ``get_module().system``
+    hay ``obj[0].run``.
     """
+    # Attribute lồng nhau từ phải sang trái: os.path.join = Attribute(Attribute(Name(os), path), join)
     parts: list[str] = []
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
@@ -72,17 +80,21 @@ def get_dotted_name(node: ast.AST) -> str | None:
 
 
 def resolve_name(node: ast.AST, imports: dict[str, str]) -> str | None:
-    """Like :func:`get_dotted_name` but with import aliases resolved."""
+    """Giống :func:`get_dotted_name` nhưng đã thay alias import bằng tên đầy đủ.
+
+    Vd với ``import subprocess as sp``: ``sp.run`` -> ``subprocess.run``.
+    """
     dotted = get_dotted_name(node)
     if dotted is None:
         return None
+    # Chỉ phần đầu (trước dấu chấm đầu tiên) có thể là alias import.
     head, _, rest = dotted.partition(".")
     qualified_head = imports.get(head, head)
     return f"{qualified_head}.{rest}" if rest else qualified_head
 
 
 def get_keyword(call: ast.Call, name: str) -> ast.keyword | None:
-    """Return the keyword argument ``name`` of a call, if present."""
+    """Keyword argument ``name`` của lời gọi hàm (vd ``shell=True``), hoặc None nếu không có."""
     for keyword in call.keywords:
         if keyword.arg == name:
             return keyword
@@ -90,7 +102,10 @@ def get_keyword(call: ast.Call, name: str) -> ast.keyword | None:
 
 
 def is_constant(node: ast.AST | None, value: object) -> bool:
-    """True if node is a literal constant equal (and same type) to ``value``."""
+    """True nếu node là hằng số bằng ``value`` VÀ cùng kiểu.
+
+    So sánh cả kiểu vì trong Python ``0 == False`` và ``1 == True``.
+    """
     return (
         isinstance(node, ast.Constant)
         and type(node.value) is type(value)
@@ -99,21 +114,21 @@ def is_constant(node: ast.AST | None, value: object) -> bool:
 
 
 def is_literal_string(node: ast.AST | None) -> bool:
-    """True if node is a plain string literal (no interpolation)."""
+    """True nếu node là chuỗi hằng thuần (không có phần nội suy như f-string)."""
     return isinstance(node, ast.Constant) and isinstance(node.value, str)
 
 
 def is_static_value(node: ast.AST | None) -> bool:
-    """True if the value is fully fixed in the source code.
+    """True nếu giá trị hoàn toàn cố định trong mã nguồn.
 
-    Static values cannot carry attacker-controlled data, e.g. ``"ls -l"``,
-    ``"a" + "b"``, ``f"text"`` (no placeholders) or ``["ls", "-l"]``.
-    Anything involving a variable, call or f-string placeholder is dynamic.
+    Giá trị tĩnh không thể chứa dữ liệu do kẻ tấn công kiểm soát, vd ``"ls -l"``,
+    ``"a" + "b"``, ``f"text"`` (không có placeholder) hay ``["ls", "-l"]``.
+    Bất cứ thứ gì có biến, lời gọi hàm hay placeholder của f-string đều là động.
     """
     if isinstance(node, ast.Constant):
         return True
     if isinstance(node, ast.JoinedStr):
-        # Literal parts of an f-string are Constant; placeholders are FormattedValue.
+        # Phần chữ của f-string là Constant; phần {placeholder} là FormattedValue.
         return all(isinstance(value, ast.Constant) for value in node.values)
     if isinstance(node, ast.BinOp):
         return is_static_value(node.left) and is_static_value(node.right)
@@ -123,17 +138,22 @@ def is_static_value(node: ast.AST | None) -> bool:
 
 
 def split_identifier(name: str) -> list[str]:
-    """Split an identifier into lowercase words.
+    """Tách tên biến thành các từ viết thường (hỗ trợ cả snake_case và camelCase).
 
     ``API_KEY`` -> ["api", "key"], ``apiKey`` -> ["api", "key"],
     ``dbPassword2`` -> ["db", "password"].
     """
+    # Hoặc một cụm chữ HOA không theo sau bởi chữ thường (API, KEY),
+    # hoặc một từ có thể bắt đầu bằng chữ hoa rồi tới chữ thường (Password).
     words = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+", name)
     return [word.lower() for word in words]
 
 
 def string_parts(node: ast.AST) -> list[str]:
-    """Literal string fragments of a string expression (concat, f-string, %, format)."""
+    """Các mảnh chuỗi hằng trong một biểu thức chuỗi (nối +, f-string, %, .format).
+
+    Vd ``"SELECT * FROM t WHERE id=" + uid`` -> ["SELECT * FROM t WHERE id="].
+    """
     parts: list[str] = []
     for child in ast.walk(node):
         if isinstance(child, ast.Constant) and isinstance(child.value, str):
@@ -142,9 +162,10 @@ def string_parts(node: ast.AST) -> list[str]:
 
 
 def get_argument(call: ast.Call, position: int, keyword: str | None = None) -> ast.AST | None:
-    """Return a call argument given either positionally or by keyword.
+    """Argument của lời gọi hàm, dù được truyền theo vị trí hay theo tên (keyword).
 
-    Returns None if the argument is absent or hidden behind ``*args``.
+    Vd ``get_argument(call, 0, "args")`` tìm được cả ``run(cmd)`` lẫn ``run(args=cmd)``.
+    Trả None nếu không có argument đó hoặc nó bị ẩn sau ``*args`` (không biết vị trí thật).
     """
     positional = call.args[:position + 1]
     if any(isinstance(arg, ast.Starred) for arg in positional):

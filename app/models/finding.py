@@ -1,7 +1,7 @@
-"""Data models shared by the analyzer core, CLI, reports and web UI.
+"""Mô hình dữ liệu dùng chung cho lõi analyzer, CLI, report và Web UI.
 
-The core deliberately uses plain dataclasses (standard library only) so it can be
-reused from the CLI or a CI/CD pipeline without pulling in web dependencies.
+Lõi cố ý chỉ dùng dataclass của thư viện chuẩn (không phụ thuộc thư viện ngoài),
+để có thể dùng lại từ CLI hoặc pipeline CI/CD mà không cần cài các gói web.
 """
 
 from __future__ import annotations
@@ -12,7 +12,10 @@ from typing import Any
 
 
 class Severity(str, Enum):
-    """Severity levels, ordered from most to least severe."""
+    """Mức độ nghiêm trọng, xếp từ nặng nhất đến nhẹ nhất.
+
+    Kế thừa ``str`` nên ``Severity.HIGH == "HIGH"`` và serialize JSON trực tiếp được.
+    """
 
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
@@ -22,21 +25,23 @@ class Severity(str, Enum):
 
     @property
     def rank(self) -> int:
-        """Higher rank means more severe (useful for sorting and thresholds)."""
+        """Rank càng cao càng nghiêm trọng (dùng để sắp xếp và so sánh với ngưỡng)."""
         return _SEVERITY_RANK[self]
 
     @classmethod
     def parse(cls, value: str | Severity) -> Severity:
-        """Parse a severity name case-insensitively, raising ValueError if unknown."""
+        """Đọc tên severity không phân biệt hoa thường ("high" -> HIGH); tên lạ gây ValueError."""
         if isinstance(value, Severity):
             return value
         try:
             return cls(str(value).strip().upper())
         except ValueError:
+            # Liệt kê các giá trị hợp lệ để người dùng sửa cấu hình dễ dàng.
             allowed = ", ".join(s.value for s in cls)
             raise ValueError(f"Unknown severity '{value}'. Allowed: {allowed}") from None
 
 
+# Không so sánh trực tiếp chuỗi ("HIGH" < "LOW" theo bảng chữ cái là sai nghĩa) mà dùng số.
 _SEVERITY_RANK: dict[Severity, int] = {
     Severity.CRITICAL: 5,
     Severity.HIGH: 4,
@@ -48,57 +53,64 @@ _SEVERITY_RANK: dict[Severity, int] = {
 
 @dataclass
 class Finding:
-    """A single security issue reported by a rule.
+    """Một vấn đề bảo mật do một rule báo cáo.
 
-    ``confidence`` is a heuristic score in [0.0, 1.0] expressing how sure the
-    analyzer is that the finding is a real, exploitable issue. It is NOT a
-    mathematically exact probability. Typical values used by the rules:
+    ``confidence`` là điểm heuristic trong [0.0, 1.0] thể hiện mức chắc chắn của
+    analyzer rằng đây là lỗi thật, khai thác được. Đây KHÔNG phải xác suất toán
+    học chính xác. Các mức thường dùng trong rule:
 
-    * 0.95      untrusted source provably reaches the sink (taint tracking)
-    * 0.80-0.90 dangerous API with a dynamic argument
-    * 0.50-0.75 pattern depends on naming/context heuristics
-    * 0.40      data went through a sanitizer the analyzer cannot verify
+    * 0.95      taint tracking chứng minh dữ liệu từ source tới được sink
+    * 0.80-0.90 API nguy hiểm nhận argument động
+    * 0.50-0.75 dựa vào heuristic tên biến / ngữ cảnh
+    * 0.40      dữ liệu đã qua sanitizer mà analyzer không chứng minh được là đủ
     """
 
-    rule_id: str
+    rule_id: str           # vd "PY003"
     rule_name: str
     severity: Severity
     confidence: float
     file: str
-    line: int
-    column: int
-    message: str
-    description: str
-    code: str
-    recommendation: str
-    cwe: str
-    category: str
-    # Optional data-flow information, filled in by taint-aware rules.
-    source: str | None = None
-    sink: str | None = None
-    taint_path: list[str] = field(default_factory=list)
+    line: int              # dòng, bắt đầu từ 1
+    column: int            # cột, bắt đầu từ 0
+    message: str           # mô tả cụ thể cho vị trí này
+    description: str       # mô tả chung của rule (vì sao nguy hiểm)
+    code: str              # dòng code liên quan (secret đã được che)
+    recommendation: str    # cách sửa
+    cwe: str               # mã CWE, vd "CWE-78"
+    category: str          # nhóm lỗ hổng, vd "Command Injection"
+    # Thông tin luồng dữ liệu (tùy chọn), do các rule có dùng taint tracking điền vào.
+    source: str | None = None      # nguồn không tin cậy, vd "request.args"
+    sink: str | None = None        # nơi nguy hiểm nhận dữ liệu, vd "os.system()"
+    taint_path: list[str] = field(default_factory=list)  # vd ["input()", "host", "os.system()"]
     language: str = ""
 
     def __post_init__(self) -> None:
+        # Chuẩn hóa và kiểm tra ngay khi tạo, để mọi Finding trong hệ thống luôn hợp lệ.
         self.severity = Severity.parse(self.severity)
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(f"confidence must be within [0.0, 1.0], got {self.confidence}")
+        # Làm tròn 2 chữ số để report gọn và so sánh trong test ổn định.
         self.confidence = round(float(self.confidence), 2)
 
     def to_dict(self) -> dict[str, Any]:
+        """Chuyển thành dict JSON-serializable (severity thành chuỗi)."""
         data = asdict(self)
         data["severity"] = self.severity.value
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Finding:
+        """Tạo lại Finding từ dict (vd kết quả scan cũ lưu dạng JSON).
+
+        Bỏ qua khóa lạ để file JSON của phiên bản cũ/mới hơn vẫn đọc được.
+        """
         known = {f.name for f in fields(cls)}
         return cls(**{key: value for key, value in data.items() if key in known})
 
 
 @dataclass
 class ScanError:
-    """A file that could not be analyzed (syntax error, bad encoding, ...)."""
+    """Một file không phân tích được (lỗi cú pháp, sai encoding, quá lớn...)."""
 
     file: str
     error_type: str
@@ -111,7 +123,7 @@ class ScanError:
 
 @dataclass
 class FileSummary:
-    """Per-file information shown in reports."""
+    """Thông tin từng file hiển thị trong report (số dòng, số finding, ngôn ngữ)."""
 
     path: str
     lines: int
@@ -124,7 +136,7 @@ class FileSummary:
 
 @dataclass
 class ScanResult:
-    """Aggregated result of scanning one file or a whole directory."""
+    """Kết quả tổng hợp khi scan một file hoặc cả một thư mục."""
 
     target: str
     tool_version: str = ""
@@ -134,29 +146,31 @@ class ScanResult:
     lines_scanned: int = 0
     files: list[FileSummary] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
-    # Hidden by the whitelist or an inline "# analyzer-ignore" comment. Kept so
-    # reports can show that something was suppressed (suppressed != safe).
+    # Finding bị ẩn bởi whitelist hoặc comment "# analyzer-ignore". Vẫn được giữ lại
+    # để report cho thấy có cảnh báo đã bị ẩn (bị ẩn != an toàn).
     suppressed: list[Finding] = field(default_factory=list)
-    # Findings dropped because they are below min_severity / min_confidence.
+    # Số finding bị bỏ vì thấp hơn min_severity / min_confidence.
     filtered_count: int = 0
     skipped_files: list[str] = field(default_factory=list)
     errors: list[ScanError] = field(default_factory=list)
 
     def severity_counts(self) -> dict[str, int]:
-        """Number of findings per severity, always containing every level."""
+        """Số finding theo từng severity; luôn có đủ mọi mức (mức không có finding = 0) để vẽ biểu đồ."""
         counts = {severity.value: 0 for severity in Severity}
         for finding in self.findings:
             counts[finding.severity.value] += 1
         return counts
 
     def sort_findings(self) -> None:
-        """Sort by file/line so reports are stable and easy to read."""
+        """Sắp xếp theo file/dòng/cột (cùng vị trí thì nặng trước) để report ổn định và dễ đọc."""
         self.findings.sort(key=lambda f: (f.file, f.line, f.column, -f.severity.rank, f.rule_id))
 
     def highest_severity(self) -> Severity | None:
+        """Severity cao nhất trong kết quả (None nếu không có finding); CLI dùng cho --fail-on."""
         return max((f.severity for f in self.findings), key=lambda s: s.rank, default=None)
 
     def summary(self) -> dict[str, Any]:
+        """Các con số tổng quan hiển thị ở đầu report và dashboard."""
         return {
             "files_scanned": self.files_scanned,
             "lines_scanned": self.lines_scanned,
@@ -169,6 +183,7 @@ class ScanResult:
         }
 
     def to_dict(self) -> dict[str, Any]:
+        """Cấu trúc đầy đủ của report JSON (cũng là định dạng lưu kết quả scan của Web UI)."""
         return {
             "scan": {
                 "target": self.target,
@@ -186,6 +201,7 @@ class ScanResult:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ScanResult:
+        """Ngược lại với to_dict: dựng lại ScanResult từ JSON đã lưu (Web UI mở lại kết quả cũ)."""
         scan, summary = data.get("scan", {}), data.get("summary", {})
         return cls(
             target=scan.get("target", ""),
