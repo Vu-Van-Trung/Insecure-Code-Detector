@@ -84,4 +84,19 @@ def test_unknown_format():
 
 
 def test_every_format_registered():
-    assert set(REPORT_FORMATS) == {"json", "csv", "html"}
+    assert set(REPORT_FORMATS) == {"json", "csv", "html", "sarif"}
+
+
+def test_sarif_report_format(result):
+    sarif_str = render_report(result, "sarif")
+    sarif = json.loads(sarif_str)
+    assert sarif["version"] == "2.1.0"
+    assert "$schema" in sarif
+    assert len(sarif["runs"]) == 1
+    driver = sarif["runs"][0]["tool"]["driver"]
+    assert driver["name"] == "Secure Code Analyzer"
+    results = sarif["runs"][0]["results"]
+    assert len(results) == 1
+    assert results[0]["ruleId"] == "PY003"
+    assert results[0]["level"] == "error"
+    assert results[0]["codeFlows"]

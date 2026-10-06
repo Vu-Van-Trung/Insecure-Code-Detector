@@ -182,6 +182,8 @@ def run_scan(args: argparse.Namespace, stdout: TextIO, stderr: TextIO) -> int:
         return EXIT_USAGE_ERROR
 
     # Exit code 1 chỉ khi có finding nặng ít nhất bằng --fail-on (vd --fail-on HIGH bỏ qua MEDIUM/LOW).
+    if result.errors:
+        return EXIT_USAGE_ERROR
     threshold = Severity.parse(args.fail_on)
     highest = result.highest_severity()
     return EXIT_FINDINGS if highest is not None and highest.rank >= threshold.rank else EXIT_OK

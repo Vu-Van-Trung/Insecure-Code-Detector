@@ -1,17 +1,52 @@
 {
     "sources": {
         "calls": [
-            "Console.ReadLine", "Console.Read", "Environment.GetEnvironmentVariable",
-            "Environment.GetCommandLineArgs", "StreamReader.ReadToEnd", "StreamReader.ReadLine"
+            "Console.ReadLine",
+            "Console.Read",
+            "Environment.GetEnvironmentVariable",
+            "Environment.GetCommandLineArgs",
+            "StreamReader.ReadToEnd",
+            "StreamReader.ReadLine"
         ],
         "members": [
-            "Request.Query", "Request.Form", "Request.QueryString", "Request.Params", "Request.Cookies",
-            "Request.Headers", "Request.Body", "Request.RouteValues", "Request.Path"
+            "Request.Query",
+            "Request.Form",
+            "Request.QueryString",
+            "Request.Params",
+            "Request.Cookies",
+            "Request.Headers",
+            "Request.Body",
+            "Request.RouteValues",
+            "Request.Path"
         ],
-        "parameter_annotations": ["FromQuery", "FromBody", "FromForm", "FromRoute", "FromHeader"],
+        "parameter_annotations": [
+            "FromQuery",
+            "FromBody",
+            "FromForm",
+            "FromRoute",
+            "FromHeader"
+        ],
         "main_args": true
     },
     "sanitizers": [
-        "int.Parse", "Int32.Parse", "long.Parse", "Int64.Parse", "Guid.Parse", "int.TryParse"
-    ]
+        "int.Parse",
+        "Int32.Parse",
+        "long.Parse",
+        "Int64.Parse",
+        "Guid.Parse",
+        "int.TryParse"
+    ],
+    "sink_sanitizers": {
+        "path": [
+            "Path.GetFileName"
+        ],
+        "html": [
+            "HttpUtility.HtmlEncode",
+            "WebUtility.HtmlEncode",
+            "HtmlEncoder.Default.Encode"
+        ],
+        "url": [],
+        "sql": [],
+        "command": []
+    }
 }

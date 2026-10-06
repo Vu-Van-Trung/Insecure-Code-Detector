@@ -353,7 +353,8 @@ def taint_details(info: TaintInfo, sink: str) -> dict[str, Any]:
 
 def sanitized_message(info: TaintInfo, sink: str) -> str:
     """Message chung cho luồng đã đi qua sanitizer."""
+    sanitizer = f"{info.sanitizer}()" if info.sanitizer else "a configured sink-specific sanitizer"
     return (
-        f"Input from {info.source} reaches {sink} after {info.sanitizer}(); "
+        f"Input from {info.source} reaches {sink} after {sanitizer}; "
         "the analyzer cannot prove this sanitizer is sufficient."
     )

@@ -21,7 +21,9 @@ def client(tmp_path) -> TestClient:
 
 def upload(client: TestClient, files=(), code: str = "", follow: bool = False):
     parts = [("files", (name, content, "text/x-python")) for name, content in files]
-    return client.post("/scan", files=parts or None, data={"code": code, "filename": "pasted.py"},
+    client.get("/")
+    return client.post("/scan", files=parts or None, data={"code": code, "filename": "pasted.py",
+                       "csrf_token": client.cookies["csrf_token"]},
                        follow_redirects=follow)
 
 
@@ -161,7 +163,12 @@ def test_security_headers(client):
 # =========================================================== reports & ids
 
 
-@pytest.mark.parametrize("fmt, media", [("json", "application/json"), ("csv", "text/csv"), ("html", "text/html")])
+@pytest.mark.parametrize("fmt, media", [
+    ("json", "application/json"),
+    ("csv", "text/csv"),
+    ("html", "text/html"),
+    ("sarif", "application/sarif+json"),
+])
 def test_report_downloads(client, fmt, media):
     scan_id = scan_id_of(upload(client, files=[("app.py", VULNERABLE)]))
     response = client.get(f"/scan/{scan_id}/report.{fmt}")
@@ -256,7 +263,9 @@ def test_java_and_csharp_uploads(client, name, content, rule):
 
 def test_pasted_code_uses_selected_language(client):
     java = 'class P { void m() throws Exception { Runtime.getRuntime().exec(System.getenv("CMD")); } }'
-    response = client.post("/scan", data={"code": java, "filename": "snippet.py", "language": "java"},
+    client.get("/")
+    response = client.post("/scan", data={"code": java, "filename": "snippet.py", "language": "java",
+                           "csrf_token": client.cookies["csrf_token"]},
                            follow_redirects=True)
     assert "JV001" in response.text and "snippet.java" in response.text
 
@@ -283,3 +292,61 @@ def test_java_syntax_error_is_shown(client):
 def test_sanitize_keeps_supported_extensions():
     assert sanitize_filename("../src/Main.java") == "Main.java"
     assert sanitize_filename("Program.CS") == "Program.cs"
+
+
+def test_csrf_cookie_issued_on_get(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "csrf_token" in response.cookies
+    assert 'name="csrf_token"' in response.text
+
+
+def test_csrf_validation_passes_with_matching_token(client):
+    get_res = client.get("/")
+    token = get_res.cookies["csrf_token"]
+    post_res = client.post(
+        "/scan",
+        data={"code": "x = 1\n", "filename": "test.py", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert post_res.status_code == 303
+
+
+def test_csrf_validation_fails_on_mismatch(client):
+    client.get("/")
+    post_res = client.post(
+        "/scan",
+        data={"code": "x = 1\n", "filename": "test.py", "csrf_token": "wrong_token"},
+    )
+    assert post_res.status_code == 403
+    assert "CSRF validation failed" in post_res.text
+
+
+def test_basic_auth_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ANALYZER_WEB_USER", "admin")
+    monkeypatch.setenv("ANALYZER_WEB_PASSWORD", "secret123")
+
+    # Request without auth
+    unauth = client.get("/")
+    assert unauth.status_code == 401
+    assert "Basic" in unauth.headers.get("www-authenticate", "")
+
+    # Request with valid basic auth
+    import base64
+    valid_cred = base64.b64encode(b"admin:secret123").decode()
+    auth = client.get("/", headers={"Authorization": f"Basic {valid_cred}"})
+    assert auth.status_code == 200
+
+
+def test_api_key_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ANALYZER_API_KEY", "super-secret-key")
+
+    body = {"code": "x = 1\n", "filename": "a.py"}
+
+    # No key -> 401
+    unauth = client.post("/api/scan", json=body)
+    assert unauth.status_code == 401
+
+    # With X-API-Key -> 200
+    auth = client.post("/api/scan", json=body, headers={"X-API-Key": "super-secret-key"})
+    assert auth.status_code == 200

@@ -14,6 +14,7 @@
 
     <form id="scan-form" class="card shadow-sm" action="/scan" method="post" enctype="multipart/form-data"
           data-max-file-kb="{{ limits.max_file_kb }}" data-extensions="{{ limits.extensions|replace(' ', '') }}" data-max-files="{{ limits.max_files }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
       <div class="card-header">
         <ul class="nav nav-tabs card-header-tabs" role="tablist">
           <li class="nav-item">
