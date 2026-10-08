@@ -1,6 +1,6 @@
 [project]
 name = "secure-code-analyzer"
-version = "1.0.0"
+version = "1.1"
 description = "Static analysis tool that detects insecure coding patterns in Python source code"
 requires-python = ">=3.12"
 

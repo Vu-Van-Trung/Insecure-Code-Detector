@@ -106,11 +106,17 @@ def verify_api_key(request: Request) -> bool:
 
 def same_origin_request(request: Request) -> bool:
     """Reject browser requests explicitly originating from a different origin."""
-    if request.headers.get("sec-fetch-site") == "cross-site":
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site == "cross-site":
         return False
     origin = request.headers.get("origin") or request.headers.get("referer")
     if not origin:
         return True  # Non-browser clients must still supply the CSRF token.
+    # Sandboxed/embedded browsers can omit the Referer and serialize their opaque
+    # origin as "null" even for a same-origin form. In that case rely on the
+    # browser's Fetch Metadata signal; the route still requires a valid CSRF token.
+    if origin == "null":
+        return fetch_site == "same-origin"
     try:
         parsed = urlsplit(origin)
         expected = urlsplit(str(request.base_url))

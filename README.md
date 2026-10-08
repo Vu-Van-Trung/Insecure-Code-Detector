@@ -392,7 +392,7 @@ File tạm của test nằm trong `.tmp/` của project (không dùng thư mục
 
 ```text
 $ python main.py scan samples/vulnerable/sql_vulnerable.py
-Secure Code Analyzer v1.0.0
+Secure Code Analyzer v1.1
 
 Scanning: samples/vulnerable/sql_vulnerable.py
 

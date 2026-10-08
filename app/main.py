@@ -300,7 +300,8 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
             csrf_token = generate_csrf_token(csrf_secret)
         response = templates.TemplateResponse(
             request, "index.html",
-            {"limits": limits, "rule_count": len(engine.rules), "csrf_token": csrf_token},
+            {"limits": limits, "rule_count": len(engine.rules), "csrf_token": csrf_token,
+             "scan_history": store.list_recent()},
         )
         if request.cookies.get(CSRF_COOKIE_NAME) != csrf_token:
             response.set_cookie(CSRF_COOKIE_NAME, csrf_token, samesite="strict", httponly=True, secure=request.url.scheme == "https")
@@ -325,7 +326,8 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
         except UploadError as exc:
             # Hiển thị lại form kèm thông báo lỗi và giữ nguyên code người dùng đã paste.
             token = request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token(csrf_secret)
-            context = {"limits": limits, "rule_count": len(engine.rules), "error": str(exc), "code": code, "csrf_token": token}
+            context = {"limits": limits, "rule_count": len(engine.rules), "error": str(exc), "code": code,
+                       "csrf_token": token, "scan_history": store.list_recent()}
             return templates.TemplateResponse(request, "index.html", context, status_code=400)
         result = engine.scan_sources(sources, target=", ".join(name for name, _ in sources))
         scan_id = store.save(result)
@@ -340,6 +342,12 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
             request, "result.html",
             {"scan_id": scan_id, "result": result, "counts": result.severity_counts(), "summary": result.summary()},
         )
+
+    @app.get("/scan/{scan_id}/history-data")
+    async def scan_history_data(scan_id: str) -> Response:
+        """Return a saved scan for the compact history dialog in the Web UI."""
+        result = load_or_404(scan_id)
+        return JSONResponse(result.to_dict())
 
     @app.get("/scan/{scan_id}/finding/{index}", response_class=HTMLResponse)
     async def finding_detail(request: Request, scan_id: str, index: int) -> Response:

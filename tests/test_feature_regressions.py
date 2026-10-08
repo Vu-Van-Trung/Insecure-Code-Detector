@@ -277,6 +277,18 @@ def test_csrf_accepts_same_origin(web_client):
     assert response.status_code == 303
 
 
+def test_csrf_accepts_opaque_origin_when_fetch_metadata_is_same_origin(web_client):
+    web_client.get("/")
+    token = web_client.cookies["csrf_token"]
+    response = web_client.post(
+        "/scan",
+        data={"code": "x=1", "csrf_token": token},
+        headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
 def test_csrf_https_cookie_is_secure(tmp_path):
     app = create_app(store=ScanStore(tmp_path / "scans"))
     with TestClient(app, base_url="https://testserver") as client:

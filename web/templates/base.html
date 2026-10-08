@@ -1,25 +1,105 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-i18n-lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Secure Code Analyzer{% endblock %}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="/static/css/style.css?v=6">
 </head>
 <body>
   <nav class="navbar navbar-dark bg-dark mb-4">
     <div class="container">
       <a class="navbar-brand fw-semibold" href="/"><i class="bi bi-shield-lock"></i> Secure Code Analyzer</a>
-      <span class="navbar-text small">v{{ version }} &middot; static analysis only &ndash; uploaded code is never executed</span>
+      <div class="d-flex align-items-center gap-2 ms-auto">
+        <span class="navbar-text small d-none d-md-inline" data-i18n="tagline">v1.1 &middot; static analysis only &ndash; uploaded code is never executed</span>
+        <button type="button" class="btn btn-outline-light btn-sm version-details-trigger" id="version-details-trigger"
+                data-i18n="version_details" aria-haspopup="dialog" aria-controls="version-details-dialog">Version details</button>
+        <label class="visually-hidden" for="language-switcher" data-i18n="language">Language</label>
+        <select id="language-switcher" class="form-select form-select-sm language-switcher" aria-label="Language" data-i18n-aria="language">
+          <option value="en">🇬🇧 English</option>
+          <option value="vi">🇻🇳 Tiếng Việt</option>
+        </select>
+        <div class="info-help-wrap">
+          <button type="button" class="info-help-trigger" id="info-help-trigger" aria-label="Information and help"
+                  data-i18n-aria="info_help" aria-haspopup="dialog" aria-controls="info-help-dialog">i</button>
+          <div class="info-help-tip" id="info-help-tip" role="status" data-i18n="info_help_tip">Information and help are here</div>
+        </div>
+      </div>
     </div>
   </nav>
   <main class="container pb-5">
     {% block content %}{% endblock %}
   </main>
+  <dialog id="version-details-dialog" class="version-dialog" aria-labelledby="version-dialog-title">
+    <div class="version-dialog-content">
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+        <div>
+          <span class="badge text-bg-primary mb-2">v1.1</span>
+          <h2 class="h4 mb-0" id="version-dialog-title" data-i18n="version_details">Version details</h2>
+        </div>
+        <button type="button" class="btn-close" id="version-dialog-close" aria-label="Close" data-i18n-aria="close"></button>
+      </div>
+      <ul class="list-unstyled version-change-list mb-0">
+        <li><span class="badge text-bg-warning" data-i18n="bug_fix">Bug fix</span><p class="mb-0 mt-2" data-i18n="csrf_fix">Fixed the CSRF validation issue.</p></li>
+        <li>
+          <span class="badge text-bg-success" data-i18n="new_feature">New feature</span>
+          <div class="version-feature-lines mt-2">
+            <span data-i18n="feature_languages">Added English and Vietnamese language selection</span>
+            <span data-i18n="feature_info">Information and Help button</span>
+            <span data-i18n="feature_history">Scan history</span>
+          </div>
+        </li>
+        <li><span class="badge text-bg-secondary" data-i18n="other_label">Other</span><p class="mb-0 mt-2" data-i18n="added_button_animations">Added animations to some buttons</p></li>
+      </ul>
+    </div>
+  </dialog>
+  <dialog id="info-help-dialog" class="version-dialog info-help-dialog" aria-labelledby="info-help-title">
+    <div class="version-dialog-content">
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-0" id="info-help-title" data-i18n="info_help_title">Information and Help</h2>
+        </div>
+        <button type="button" class="btn-close" id="info-help-close" aria-label="Close" data-i18n-aria="close"></button>
+      </div>
+      <p class="project-course-notice mb-3" data-i18n="project_course">This is a project for the Information Security Programming course.</p>
+      <h3 class="h6 mb-2" data-i18n="team_members">Project team</h3>
+      <ul class="list-unstyled member-list mb-4">
+        <li><span>Trần Minh Thắng</span><a href="https://github.com/LowKeyLifeeee" target="_blank" rel="noopener noreferrer" aria-label="Trần Minh Thắng on GitHub"><i class="bi bi-github" aria-hidden="true"></i></a></li>
+        <li><span>Đặng Hải Tiến</span><a href="https://github.com/KoliangFish" target="_blank" rel="noopener noreferrer" aria-label="Đặng Hải Tiến on GitHub"><i class="bi bi-github" aria-hidden="true"></i></a></li>
+        <li><span>Vũ Văn trung</span><a href="https://github.com/Vu-Van-Trung" target="_blank" rel="noopener noreferrer" aria-label="Vũ Văn trung on GitHub"><i class="bi bi-github" aria-hidden="true"></i></a></li>
+      </ul>
+      <h3 class="h6 mb-2" data-i18n="getting_started">Getting started</h3>
+      <ol class="help-steps mb-0">
+        <li data-i18n="help_step_upload">Choose Upload Source File and select one or more Python, Java, or C# files.</li>
+        <li data-i18n="help_step_paste">Or choose Paste Code, select the source language, then paste code into the editor.</li>
+        <li data-i18n="help_step_scan">Select Start Scan. The analyzer reads code statically; it does not run your uploaded code.</li>
+        <li data-i18n="help_step_results">Review findings by severity, open a finding for details and recommendations, or export a JSON, CSV, HTML, or SARIF report.</li>
+      </ol>
+    </div>
+  </dialog>
+  <dialog id="history-details-dialog" class="version-dialog history-details-dialog" aria-labelledby="history-details-title">
+    <div class="version-dialog-content">
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+        <div>
+          <h2 class="h4 mb-1" id="history-details-title" data-i18n="history_details">Scan details</h2>
+          <div class="small text-secondary" id="history-details-meta"></div>
+        </div>
+        <button type="button" class="btn-close" id="history-details-close" aria-label="Close" data-i18n-aria="close"></button>
+      </div>
+      <div class="history-detail-stats" id="history-detail-stats"></div>
+      <div class="history-detail-findings" id="history-detail-findings"></div>
+    </div>
+  </dialog>
+  <div class="scan-loading-overlay" id="scan-loading-overlay" aria-live="polite" aria-atomic="true" aria-hidden="true">
+    <div class="scan-loading-card">
+      <div class="scan-loading-spinner" aria-hidden="true"></div>
+      <p class="scan-loading-message mb-0" id="scan-loading-message" data-i18n="malware_message_0">Looking for malware…</p>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   {% block scripts %}{% endblock %}
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=10"></script>
 </body>
 </html>

@@ -41,6 +41,26 @@ def test_home_page(client):
     assert response.status_code == 200
     for text in ("Secure Code Analyzer", "Upload Source File", "Paste Code", "Start Scan", "Java", "C#"):
         assert text in response.text
+    assert 'id="language-switcher"' in response.text
+    assert "🇬🇧 English" in response.text and "🇻🇳 Tiếng Việt" in response.text
+    assert 'data-i18n-lang="en"' in response.text
+    assert "v1.1" in response.text and 'id="version-details-trigger"' in response.text
+    assert 'id="version-details-dialog"' in response.text
+    assert "Fixed the CSRF validation issue." in response.text
+    assert "Added English and Vietnamese language selection" in response.text
+    assert "Information and Help button" in response.text
+    assert "Scan history" in response.text
+    assert "Added animations to some buttons" in response.text
+    assert 'id="scan-history-tab"' in response.text
+    assert 'id="scan-loading-overlay"' in response.text
+    assert 'data-i18n="malware_message_0"' in response.text
+    assert 'id="info-help-trigger"' in response.text
+    assert 'id="info-help-dialog"' in response.text
+    assert "Information and help are here" in response.text
+    assert "This is a project for the Information Security Programming course." in response.text
+    for github in ("LowKeyLifeeee", "KoliangFish", "Vu-Van-Trung"):
+        assert f"https://github.com/{github}" in response.text
+    assert "Choose Upload Source File" in response.text
 
 
 def test_upload_scan_result_detail_flow(client):
@@ -57,6 +77,31 @@ def test_upload_scan_result_detail_flow(client):
     assert detail.status_code == 200
     for text in ("Rule ID", "CWE-78", "Vulnerable Code", "Recommendation", "Taint Path", "input()", "os.system()"):
         assert text in detail.text
+
+
+def test_scan_history_lists_saved_scan_and_returns_details(client):
+    response = upload(client, files=[("history_sample.py", VULNERABLE)])
+    assert response.status_code == 303
+    scan_id = scan_id_of(response)
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert "history_sample.py" in home.text
+    assert scan_id in home.text
+    assert "View details" in home.text
+
+    details = client.get(f"/scan/{scan_id}/history-data")
+    assert details.status_code == 200
+    payload = details.json()
+    assert payload["scan"]["target"] == "history_sample.py"
+    assert payload["summary"]["files_scanned"] == 1
+    assert payload["findings"]
+    assert payload["findings"][0]["rule_id"] == "PY003"
+
+
+def test_scan_history_details_rejects_unknown_scan(client):
+    response = client.get("/scan/00000000000000000000000000000000/history-data")
+    assert response.status_code == 404
 
 
 def test_paste_code(client):
