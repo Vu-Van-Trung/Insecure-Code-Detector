@@ -115,7 +115,10 @@ def same_origin_request(request: Request) -> bool:
         parsed = urlsplit(origin)
         expected = urlsplit(str(request.base_url))
         def authority(url):
-            return (url.scheme.lower(), url.hostname,
+            host = (url.hostname or "").lower()
+            if host in ("127.0.0.1", "localhost", "::1"):
+                host = "localhost"
+            return (url.scheme.lower(), host,
                     url.port or (443 if url.scheme == "https" else 80))
         return authority(parsed) == authority(expected)
     except ValueError:

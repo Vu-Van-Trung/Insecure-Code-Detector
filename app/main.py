@@ -218,7 +218,19 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
 
     # Share this secret across workers via the environment when deploying.
     configured_secret = os.environ.get("ANALYZER_CSRF_SECRET")
-    csrf_secret = configured_secret.encode("utf-8") if configured_secret else secrets.token_bytes(32)
+    if configured_secret:
+        csrf_secret = configured_secret.encode("utf-8")
+    else:
+        secret_file = PROJECT_ROOT / "data" / ".csrf_secret"
+        try:
+            if secret_file.exists():
+                csrf_secret = secret_file.read_bytes()
+            else:
+                secret_file.parent.mkdir(parents=True, exist_ok=True)
+                csrf_secret = secrets.token_bytes(32)
+                secret_file.write_bytes(csrf_secret)
+        except OSError:
+            csrf_secret = secrets.token_bytes(32)
     if len(csrf_secret) < 32:
         raise ValueError("ANALYZER_CSRF_SECRET must contain at least 32 bytes.")
     app = FastAPI(title="Secure Code Analyzer", version=__version__, docs_url="/api/docs", redoc_url=None)

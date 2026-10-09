@@ -519,3 +519,28 @@ analyzer: 0 = thành công dưới ngưỡng, 1 = có finding đạt ngưỡng, 
 Taint path hiện chỉ lưu tên bước, chưa lưu tọa độ từng bước; SARIF chỉ gắn tọa độ
 thật cho sink. Việc upload vẫn cần quyền GitHub Code Scanning phù hợp với repository.
 Tham khảo [SARIF support của GitHub](https://docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support).
+
+#### Repository chưa bật Code Scanning
+
+Workflow luôn lưu `results.sarif` vào artifact **security-scan-sarif** (giữ 14 ngày).
+Mở **Actions → lần chạy → Artifacts** để tải báo cáo, không cần bật Code Scanning.
+Bước kiểm tra mã thoát vẫn làm CI thất bại khi có finding CRITICAL hoặc lỗi scan;
+không bỏ qua các lỗi này để làm checks xanh.
+
+Upload vào tab **Security / Code scanning** là tích hợp tùy chọn:
+
+1. Bật tính năng Code Scanning/GitHub Code Security phù hợp với repository trong
+   **Settings → Advanced Security**. Repository private/internal cần quyền sử dụng
+   tính năng tương ứng; chỉ thêm quyền vào workflow không thay thế việc bật tính năng.
+2. Vào **Settings → Secrets and variables → Actions → Variables**, tạo repository
+   variable `CODE_SCANNING_ENABLED` với giá trị `true`.
+3. Push thay đổi workflow hoặc chạy lại workflow trên phiên bản đã cập nhật.
+
+Workflow dùng `github/codeql-action/upload-sarif@v4`, giữ quyền
+`security-events: write`, và bỏ qua upload Code Scanning đối với PR từ fork.
+Khi đã bật variable, lỗi upload vẫn được báo là lỗi CI để phát hiện cấu hình sai.
+Nếu variable chưa đặt hoặc khác `true`, workflow chỉ lưu artifact và ghi rõ lý do
+trong phần summary. Cảnh báo deprecation v3 không phải nguyên nhân của lỗi
+`Code scanning is not enabled for this repository`.
+
+Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/integrate-with-existing-tools/upload-sarif-file).
