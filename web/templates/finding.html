@@ -3,9 +3,9 @@
 {% block content %}
 <nav aria-label="breadcrumb">
   <ol class="breadcrumb small">
-    <li class="breadcrumb-item"><a href="/">Home</a></li>
-    <li class="breadcrumb-item"><a href="/scan/{{ scan_id }}">Scan result</a></li>
-    <li class="breadcrumb-item active" aria-current="page">Finding {{ index + 1 }} / {{ total }}</li>
+    <li class="breadcrumb-item"><a href="/" data-i18n="home">Home</a></li>
+    <li class="breadcrumb-item"><a href="/scan/{{ scan_id }}" data-i18n="scan_result">Scan result</a></li>
+    <li class="breadcrumb-item active" aria-current="page" data-i18n="finding_position" data-i18n-params='{"index":{{ index + 1 }},"total":{{ total }}}'>Finding {{ index + 1 }} / {{ total }}</li>
   </ol>
 </nav>
 
@@ -18,30 +18,30 @@
     <p class="lead fs-6">{{ finding.message }}</p>
 
     <dl class="row small mb-3">
-      <dt class="col-sm-3">Rule ID</dt><dd class="col-sm-9">{{ finding.rule_id }}</dd>
-      <dt class="col-sm-3">Rule Name</dt><dd class="col-sm-9">{{ finding.rule_name }}</dd>
-      <dt class="col-sm-3">Severity</dt><dd class="col-sm-9">{{ finding.severity.value }}</dd>
-      <dt class="col-sm-3">Confidence</dt><dd class="col-sm-9">{{ (finding.confidence * 100)|round|int }}% <span class="text-secondary">(heuristic)</span></dd>
+      <dt class="col-sm-3" data-i18n="rule_id">Rule ID</dt><dd class="col-sm-9">{{ finding.rule_id }}</dd>
+      <dt class="col-sm-3" data-i18n="rule_name">Rule Name</dt><dd class="col-sm-9">{{ finding.rule_name }}</dd>
+      <dt class="col-sm-3" data-i18n="severity">Severity</dt><dd class="col-sm-9" data-i18n-severity>{{ finding.severity.value }}</dd>
+      <dt class="col-sm-3" data-i18n="confidence">Confidence</dt><dd class="col-sm-9">{{ (finding.confidence * 100)|round|int }}% <span class="text-secondary" data-i18n="heuristic">(heuristic)</span></dd>
       <dt class="col-sm-3">CWE</dt><dd class="col-sm-9">{{ finding.cwe }}</dd>
-      <dt class="col-sm-3">Category</dt><dd class="col-sm-9">{{ finding.category }}</dd>
+      <dt class="col-sm-3" data-i18n="category">Category</dt><dd class="col-sm-9">{{ finding.category }}</dd>
       <dt class="col-sm-3">Language</dt><dd class="col-sm-9">{{ language_names.get(finding.language, finding.language) }}</dd>
-      <dt class="col-sm-3">File</dt><dd class="col-sm-9">{{ finding.file }}</dd>
-      <dt class="col-sm-3">Line</dt><dd class="col-sm-9">{{ finding.line }}</dd>
-      <dt class="col-sm-3">Column</dt><dd class="col-sm-9">{{ finding.column }}</dd>
+      <dt class="col-sm-3" data-i18n="file">File</dt><dd class="col-sm-9">{{ finding.file }}</dd>
+      <dt class="col-sm-3" data-i18n="line">Line</dt><dd class="col-sm-9">{{ finding.line }}</dd>
+      <dt class="col-sm-3" data-i18n="column">Column</dt><dd class="col-sm-9">{{ finding.column }}</dd>
       {% if finding.source %}
       <dt class="col-sm-3">Source</dt><dd class="col-sm-9 font-monospace">{{ finding.source }}</dd>
       <dt class="col-sm-3">Sink</dt><dd class="col-sm-9 font-monospace">{{ finding.sink }}</dd>
       {% endif %}
     </dl>
 
-    <h2 class="h6">Description</h2>
+      <h2 class="h6" data-i18n="description">Description</h2>
     <p>{{ finding.description }}</p>
 
-    <h2 class="h6">Vulnerable Code</h2>
+    <h2 class="h6" data-i18n="vulnerable_code">Vulnerable Code</h2>
     <pre class="code-block"><code><span class="text-secondary">{{ finding.line }} |</span> {{ finding.code }}</code></pre>
 
     {% if finding.taint_path %}
-    <h2 class="h6">Taint Path</h2>
+    <h2 class="h6" data-i18n="taint_path">Taint Path</h2>
     <ol class="taint-path">
       {% for step in finding.taint_path %}
       <li class="{% if loop.first %}source{% elif loop.last %}sink{% endif %}"><code>{{ step }}</code>
@@ -51,13 +51,13 @@
     </ol>
     {% endif %}
 
-    <h2 class="h6">Recommendation</h2>
+    <h2 class="h6" data-i18n="recommendation">Recommendation</h2>
     <div class="alert alert-success mb-0"><i class="bi bi-lightbulb"></i> {{ finding.recommendation }}</div>
   </div>
   <div class="card-footer d-flex justify-content-between">
-    {% if index > 0 %}<a class="btn btn-sm btn-outline-secondary" href="/scan/{{ scan_id }}/finding/{{ index - 1 }}"><i class="bi bi-chevron-left"></i> Previous</a>{% else %}<span></span>{% endif %}
-    <a class="btn btn-sm btn-outline-primary" href="/scan/{{ scan_id }}">Back to results</a>
-    {% if index + 1 < total %}<a class="btn btn-sm btn-outline-secondary" href="/scan/{{ scan_id }}/finding/{{ index + 1 }}">Next <i class="bi bi-chevron-right"></i></a>{% else %}<span></span>{% endif %}
+    {% if index > 0 %}<a class="btn btn-sm btn-outline-secondary" href="/scan/{{ scan_id }}/finding/{{ index - 1 }}"><i class="bi bi-chevron-left"></i> <span data-i18n="previous">Previous</span></a>{% else %}<span></span>{% endif %}
+    <a class="btn btn-sm btn-outline-primary" href="/scan/{{ scan_id }}" data-i18n="back_to_results">Back to results</a>
+    {% if index + 1 < total %}<a class="btn btn-sm btn-outline-secondary" href="/scan/{{ scan_id }}/finding/{{ index + 1 }}"><span data-i18n="next">Next</span> <i class="bi bi-chevron-right"></i></a>{% else %}<span></span>{% endif %}
   </div>
 </div>
 {% endblock %}

@@ -3,15 +3,15 @@
 {% block content %}
 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
   <div>
-    <h1 class="h4 mb-0">Scan result</h1>
+    <h1 class="h4 mb-0" data-i18n="scan_result">Scan result</h1>
     <div class="small text-secondary">{{ result.target }} &middot; {{ result.started_at }} &middot; {{ result.duration_ms }} ms</div>
   </div>
-  <div class="btn-group" role="group" aria-label="Export report">
+    <div class="btn-group" role="group" aria-label="Export report" data-i18n-aria="export_report">
     <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.json"><i class="bi bi-filetype-json"></i> JSON</a>
     <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.csv"><i class="bi bi-filetype-csv"></i> CSV</a>
     <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.html"><i class="bi bi-filetype-html"></i> HTML</a>
     <a class="btn btn-outline-secondary btn-sm" href="/scan/{{ scan_id }}/report.sarif"><i class="bi bi-shield-check"></i> SARIF</a>
-    <a class="btn btn-primary btn-sm" href="/"><i class="bi bi-plus-lg"></i> New scan</a>
+    <a class="btn btn-primary btn-sm" href="/"><i class="bi bi-plus-lg"></i> <span data-i18n="new_scan">New scan</span></a>
   </div>
 </div>
 
@@ -29,7 +29,7 @@
       {% for label, value in [("Files Scanned", summary.files_scanned), ("Lines Scanned", summary.lines_scanned),
                               ("Total Findings", summary.total_findings), ("Suppressed", summary.suppressed)] %}
       <div class="col"><div class="card stat h-100"><div class="card-body">
-        <div class="stat-value">{{ value }}</div><div class="stat-label">{{ label }}</div>
+        <div class="stat-value">{{ value }}</div><div class="stat-label" data-i18n="{{ label|lower|replace(' ', '_') }}">{{ label }}</div>
       </div></div></div>
       {% endfor %}
       {% for severity in severities %}
@@ -41,11 +41,11 @@
   </div>
   <div class="col-lg-5">
     <div class="card h-100"><div class="card-body">
-      <h2 class="h6">Findings by severity</h2>
+      <h2 class="h6" data-i18n="findings_by_severity">Findings by severity</h2>
       {% if summary.total_findings %}
       <div class="chart-box"><canvas id="severity-chart" data-counts='{{ counts|tojson }}' aria-label="Findings by severity chart" role="img"></canvas></div>
       {% else %}
-      <p class="text-success mb-0"><i class="bi bi-check-circle"></i> No findings.</p>
+      <p class="text-success mb-0"><i class="bi bi-check-circle"></i> <span data-i18n="no_findings">No findings.</span></p>
       {% endif %}
     </div></div>
   </div>
@@ -54,18 +54,18 @@
 {% if result.findings %}
 <div class="card">
   <div class="card-header d-flex flex-wrap gap-2 align-items-center">
-    <strong class="me-auto">Findings</strong>
-    <div class="btn-group btn-group-sm" role="group" aria-label="Filter by severity" id="severity-filter">
-      <button type="button" class="btn btn-outline-secondary active" data-severity="ALL">All</button>
+  <strong class="me-auto" data-i18n="findings">Findings</strong>
+    <div class="btn-group btn-group-sm" role="group" aria-label="Filter by severity" data-i18n-aria="filter_severity" id="severity-filter">
+      <button type="button" class="btn btn-outline-secondary active" data-severity="ALL" data-i18n="all">All</button>
       {% for severity in severities %}{% if counts[severity] %}
       <button type="button" class="btn btn-outline-secondary" data-severity="{{ severity }}">{{ severity|title }}</button>
       {% endif %}{% endfor %}
     </div>
-    <input type="search" id="finding-search" class="form-control form-control-sm w-auto" placeholder="Search..." aria-label="Search findings">
+    <input type="search" id="finding-search" class="form-control form-control-sm w-auto" placeholder="Search..." data-i18n-placeholder="search" aria-label="Search findings" data-i18n-aria="search_findings">
   </div>
   <div class="table-responsive">
     <table class="table table-hover align-middle mb-0 findings-table">
-      <thead><tr><th>Severity</th><th>Lang</th><th>Rule</th><th>Location</th><th>Message</th><th>Confidence</th></tr></thead>
+      <thead><tr><th data-i18n="severity">Severity</th><th data-i18n="lang">Lang</th><th data-i18n="rule">Rule</th><th data-i18n="location">Location</th><th data-i18n="message">Message</th><th data-i18n="confidence">Confidence</th></tr></thead>
       <tbody>
       {% for f in result.findings %}
         <tr data-severity="{{ f.severity.value }}" data-href="/scan/{{ scan_id }}/finding/{{ loop.index0 }}" class="finding-row">
@@ -92,7 +92,7 @@
 </details>
 {% endif %}
 
-<p class="small text-secondary mt-3">
+<p class="small text-secondary mt-3" data-i18n="confidence_note">
   Confidence is the analyzer's heuristic certainty, not an exact probability. Static analysis may miss
   issues or report false positives &ndash; review each finding.
 </p>
