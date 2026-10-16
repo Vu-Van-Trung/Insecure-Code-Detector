@@ -19,6 +19,8 @@ BẢO MẬT của chính ứng dụng web:
 from __future__ import annotations
 
 import logging
+import os
+import secrets
 import re
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -41,6 +43,16 @@ from app.logging_config import setup_logging
 from app.models.finding import Finding, ScanResult, Severity
 from app.reports import REPORT_FORMATS, render_report
 from app.rules.registry import load_builtin_rules
+from app.security import (
+    CSRF_COOKIE_NAME,
+    generate_csrf_token,
+    is_api_auth_configured,
+    is_web_auth_configured,
+    verify_api_key,
+    verify_basic_auth,
+    verify_csrf_token,
+    same_origin_request,
+)
 from app.storage import ScanStore
 
 logger = logging.getLogger(__name__)
@@ -224,6 +236,23 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
     templates.env.globals.update(version=__version__, severities=[s.value for s in Severity],
                                  language_names=DISPLAY_NAMES)
 
+    # Share this secret across workers via the environment when deploying.
+    configured_secret = os.environ.get("ANALYZER_CSRF_SECRET")
+    if configured_secret:
+        csrf_secret = configured_secret.encode("utf-8")
+    else:
+        secret_file = PROJECT_ROOT / "data" / ".csrf_secret"
+        try:
+            if secret_file.exists():
+                csrf_secret = secret_file.read_bytes()
+            else:
+                secret_file.parent.mkdir(parents=True, exist_ok=True)
+                csrf_secret = secrets.token_bytes(32)
+                secret_file.write_bytes(csrf_secret)
+        except OSError:
+            csrf_secret = secrets.token_bytes(32)
+    if len(csrf_secret) < 32:
+        raise ValueError("ANALYZER_CSRF_SECRET must contain at least 32 bytes.")
     app = FastAPI(title="Secure Code Analyzer", version=__version__, docs_url="/api/docs", redoc_url=None)
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     # Các giới hạn hiển thị trên trang upload.
@@ -235,7 +264,17 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
 
     @app.middleware("http")
     async def limit_and_harden(request: Request, call_next):
-        """Chạy trước mọi request: chặn request POST quá lớn; gắn security header vào response."""
+        """Chạy trước mọi request: kiểm tra auth; chặn POST quá lớn; gắn security headers."""
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/docs":
+            if is_api_auth_configured() and not verify_api_key(request):
+                return _error_response(request, 401, "Invalid or missing API key.")
+        elif not path.startswith("/static/") and path != "/health":
+            if is_web_auth_configured() and not verify_basic_auth(request):
+                response = _error_response(request, 401, "Authentication required.")
+                response.headers["WWW-Authenticate"] = 'Basic realm="Secure Code Analyzer"'
+                return response
+
         if request.method == "POST":
             # Bắt buộc có Content-Length để biết kích thước TRƯỚC khi đọc body
             # (không có thì kẻ tấn công có thể gửi body vô hạn kiểu chunked).
@@ -290,7 +329,17 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> Response:
         """Trang chủ: form upload file / paste code."""
-        return templates.TemplateResponse(request, "index.html", {"limits": limits, "rule_count": len(engine.rules)})
+        csrf_token = request.cookies.get(CSRF_COOKIE_NAME)
+        if not verify_csrf_token(csrf_token, csrf_token, csrf_secret):
+            csrf_token = generate_csrf_token(csrf_secret)
+        response = templates.TemplateResponse(
+            request, "index.html",
+            {"limits": limits, "rule_count": len(engine.rules), "csrf_token": csrf_token,
+             "scan_history": store.list_recent()},
+        )
+        if request.cookies.get(CSRF_COOKIE_NAME) != csrf_token:
+            response.set_cookie(CSRF_COOKIE_NAME, csrf_token, samesite="strict", httponly=True, secure=request.url.scheme == "https")
+        return response
 
     @app.post("/scan")
     async def scan(
@@ -300,8 +349,13 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
         code: Annotated[str, Form(max_length=MAX_FILE_BYTES)] = "",
         filename: Annotated[str, Form(max_length=MAX_FILENAME_LENGTH)] = "pasted_code.py",
         language: Annotated[LanguageName, Form()] = "python",
+        csrf_token: Annotated[str, Form()] = "",
     ) -> Response:
         """Nhận form, scan, lưu kết quả rồi chuyển hướng sang trang kết quả."""
+        cookie_csrf = request.cookies.get(CSRF_COOKIE_NAME)
+        provided = csrf_token or request.headers.get("X-CSRF-Token")
+        if not same_origin_request(request) or not verify_csrf_token(provided, cookie_csrf, csrf_secret):
+            return _error_response(request, 403, "CSRF validation failed. Please refresh the page and try again.")
         try:
             if folder:
                 sources, skipped = await collect_folder(folder, settings.excluded_dirs)
@@ -315,7 +369,9 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
                 # Upload thư mục được gửi bằng fetch(): trả lỗi dạng JSON để trang hiển thị.
                 return JSONResponse({"detail": str(exc)}, status_code=400)
             # Hiển thị lại form kèm thông báo lỗi và giữ nguyên code người dùng đã paste.
-            context = {"limits": limits, "rule_count": len(engine.rules), "error": str(exc), "code": code}
+            token = request.cookies.get(CSRF_COOKIE_NAME) or generate_csrf_token(csrf_secret)
+            context = {"limits": limits, "rule_count": len(engine.rules), "error": str(exc), "code": code,
+                       "csrf_token": token, "scan_history": store.list_recent()}
             return templates.TemplateResponse(request, "index.html", context, status_code=400)
         result = engine.scan_sources(sources, target=target)
         result.skipped_files.extend(skipped)
@@ -331,6 +387,12 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
             request, "result.html",
             {"scan_id": scan_id, "result": result, "counts": result.severity_counts(), "summary": result.summary()},
         )
+
+    @app.get("/scan/{scan_id}/history-data")
+    async def scan_history_data(scan_id: str) -> Response:
+        """Return a saved scan for the compact history dialog in the Web UI."""
+        result = load_or_404(scan_id)
+        return JSONResponse(result.to_dict())
 
     @app.get("/scan/{scan_id}/finding/{index}", response_class=HTMLResponse)
     async def finding_detail(request: Request, scan_id: str, index: int) -> Response:

@@ -210,3 +210,32 @@ def test_inline_ignore_comment(engine):
 def test_syntax_error_is_reported(engine):
     [error] = engine.scan_source("class C { void M( { }", "Broken.cs").errors
     assert error.error_type == "SyntaxError" and "C#" in error.reason
+
+
+def test_generic_encoder_does_not_sanitize_sql(cs):
+    code = """
+    string id = Request.Query["id"];
+    var p = SqlParameter(id);
+    string q = "SELECT * FROM users WHERE id = " + p;
+    new SqlCommand(q, conn);
+    """
+    [finding] = cs(code, "CS002")
+    assert finding.severity is Severity.CRITICAL
+    assert finding.confidence >= 0.9
+
+
+def test_inter_procedural_call_in_csharp(cs):
+    code = """
+    class Controller {
+        void ExecuteCmd(string c) {
+            Process.Start("cmd.exe", "/c " + c);
+        }
+        void Handle() {
+            ExecuteCmd(Console.ReadLine());
+        }
+    }
+    """
+    findings = cs(code, "CS001", wrap=False)
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+    assert findings[0].source == "Console.ReadLine()"

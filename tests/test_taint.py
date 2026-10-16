@@ -184,15 +184,28 @@ def test_parameter_shadows_module_variable():
     assert label_at_sink("cmd = input()\ndef f(cmd):\n    sink(cmd)") is None
 
 
-def test_no_inter_procedural_analysis():
-    """Documented limitation: taint does not flow through calls into other functions."""
+def test_inter_procedural_analysis():
+    """Inter-procedural analysis: taint flows through calls into other functions."""
     code = """
     def run(cmd):
         sink(cmd)
 
     run(input())
     """
-    assert label_at_sink(code) is None
+    assert_tainted(label_at_sink(code), "input()", ("input()", "cmd"))
+
+
+def test_inter_procedural_return_analysis():
+    """Inter-procedural analysis: return value of helper function propagates taint."""
+    code = """
+    def get_user_input():
+        return input()
+
+    cmd = get_user_input()
+    sink(cmd)
+    """
+    assert_tainted(label_at_sink(code), "input()", ("input()", "get_user_input()", "cmd"))
+
 
 
 # =========================================================== sanitizers

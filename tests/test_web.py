@@ -21,7 +21,9 @@ def client(tmp_path) -> TestClient:
 
 def upload(client: TestClient, files=(), code: str = "", follow: bool = False):
     parts = [("files", (name, content, "text/x-python")) for name, content in files]
-    return client.post("/scan", files=parts or None, data={"code": code, "filename": "pasted.py"},
+    client.get("/")
+    return client.post("/scan", files=parts or None, data={"code": code, "filename": "pasted.py",
+                       "csrf_token": client.cookies["csrf_token"]},
                        follow_redirects=follow)
 
 
@@ -39,6 +41,26 @@ def test_home_page(client):
     assert response.status_code == 200
     for text in ("Secure Code Analyzer", "Upload Source File", "Paste Code", "Start Scan", "Java", "C#"):
         assert text in response.text
+    assert 'id="language-switcher"' in response.text
+    assert "🇬🇧 English" in response.text and "🇻🇳 Tiếng Việt" in response.text
+    assert 'data-i18n-lang="en"' in response.text
+    assert "v1.1" in response.text and 'id="version-details-trigger"' in response.text
+    assert 'id="version-details-dialog"' in response.text
+    assert "Fixed the CSRF validation issue." in response.text
+    assert "Added English and Vietnamese language selection" in response.text
+    assert "Information and Help button" in response.text
+    assert "Scan history" in response.text
+    assert "Added animations to some buttons" in response.text
+    assert 'id="scan-history-tab"' in response.text
+    assert 'id="scan-loading-overlay"' in response.text
+    assert 'data-i18n="malware_message_0"' in response.text
+    assert 'id="info-help-trigger"' in response.text
+    assert 'id="info-help-dialog"' in response.text
+    assert "Information and help are here" in response.text
+    assert "This is a project for the Information Security Programming course." in response.text
+    for github in ("LowKeyLifeeee", "KoliangFish", "Vu-Van-Trung"):
+        assert f"https://github.com/{github}" in response.text
+    assert "Choose Upload Source File" in response.text
 
 
 def test_upload_scan_result_detail_flow(client):
@@ -55,6 +77,31 @@ def test_upload_scan_result_detail_flow(client):
     assert detail.status_code == 200
     for text in ("Rule ID", "CWE-78", "Vulnerable Code", "Recommendation", "Taint Path", "input()", "os.system()"):
         assert text in detail.text
+
+
+def test_scan_history_lists_saved_scan_and_returns_details(client):
+    response = upload(client, files=[("history_sample.py", VULNERABLE)])
+    assert response.status_code == 303
+    scan_id = scan_id_of(response)
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert "history_sample.py" in home.text
+    assert scan_id in home.text
+    assert "View details" in home.text
+
+    details = client.get(f"/scan/{scan_id}/history-data")
+    assert details.status_code == 200
+    payload = details.json()
+    assert payload["scan"]["target"] == "history_sample.py"
+    assert payload["summary"]["files_scanned"] == 1
+    assert payload["findings"]
+    assert payload["findings"][0]["rule_id"] == "PY003"
+
+
+def test_scan_history_details_rejects_unknown_scan(client):
+    response = client.get("/scan/00000000000000000000000000000000/history-data")
+    assert response.status_code == 404
 
 
 def test_paste_code(client):
@@ -161,7 +208,12 @@ def test_security_headers(client):
 # =========================================================== reports & ids
 
 
-@pytest.mark.parametrize("fmt, media", [("json", "application/json"), ("csv", "text/csv"), ("html", "text/html")])
+@pytest.mark.parametrize("fmt, media", [
+    ("json", "application/json"),
+    ("csv", "text/csv"),
+    ("html", "text/html"),
+    ("sarif", "application/sarif+json"),
+])
 def test_report_downloads(client, fmt, media):
     scan_id = scan_id_of(upload(client, files=[("app.py", VULNERABLE)]))
     response = client.get(f"/scan/{scan_id}/report.{fmt}")
@@ -256,7 +308,9 @@ def test_java_and_csharp_uploads(client, name, content, rule):
 
 def test_pasted_code_uses_selected_language(client):
     java = 'class P { void m() throws Exception { Runtime.getRuntime().exec(System.getenv("CMD")); } }'
-    response = client.post("/scan", data={"code": java, "filename": "snippet.py", "language": "java"},
+    client.get("/")
+    response = client.post("/scan", data={"code": java, "filename": "snippet.py", "language": "java",
+                           "csrf_token": client.cookies["csrf_token"]},
                            follow_redirects=True)
     assert "JV001" in response.text and "snippet.java" in response.text
 
@@ -288,10 +342,19 @@ def test_sanitize_keeps_supported_extensions():
 # =========================================================== folder upload
 
 
-def upload_folder(client: TestClient, files, fetch: bool = False):
+def upload_folder(client: TestClient, files, fetch: bool = False, csrf: bool = True):
+    """Same request as app.js: files named by relative path, CSRF token in the X-CSRF-Token header."""
     parts = [("folder", (path, content, "application/octet-stream")) for path, content in files]
-    headers = {"X-Requested-With": "fetch"} if fetch else {}
+    client.get("/")
+    headers = {"X-CSRF-Token": client.cookies["csrf_token"]} if csrf else {}
+    if fetch:
+        headers["X-Requested-With"] = "fetch"
     return client.post("/scan", files=parts, headers=headers, follow_redirects=False)
+
+
+def test_folder_upload_requires_csrf_token(client):
+    response = upload_folder(client, [("p/a.py", b"x = 1\n")], fetch=True, csrf=False)
+    assert response.status_code == 403
 
 
 def test_folder_upload_keeps_relative_paths_and_skips_other_files(client):
@@ -345,3 +408,61 @@ def test_sanitize_relative_path(raw, expected):
 def test_unique_name_keeps_extension():
     used: set[str] = set()
     assert [web.unique_name("a/x.php", used) for _ in range(3)] == ["a/x.php", "a/x_2.php", "a/x_3.php"]
+
+
+def test_csrf_cookie_issued_on_get(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "csrf_token" in response.cookies
+    assert 'name="csrf_token"' in response.text
+
+
+def test_csrf_validation_passes_with_matching_token(client):
+    get_res = client.get("/")
+    token = get_res.cookies["csrf_token"]
+    post_res = client.post(
+        "/scan",
+        data={"code": "x = 1\n", "filename": "test.py", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert post_res.status_code == 303
+
+
+def test_csrf_validation_fails_on_mismatch(client):
+    client.get("/")
+    post_res = client.post(
+        "/scan",
+        data={"code": "x = 1\n", "filename": "test.py", "csrf_token": "wrong_token"},
+    )
+    assert post_res.status_code == 403
+    assert "CSRF validation failed" in post_res.text
+
+
+def test_basic_auth_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ANALYZER_WEB_USER", "admin")
+    monkeypatch.setenv("ANALYZER_WEB_PASSWORD", "secret123")
+
+    # Request without auth
+    unauth = client.get("/")
+    assert unauth.status_code == 401
+    assert "Basic" in unauth.headers.get("www-authenticate", "")
+
+    # Request with valid basic auth
+    import base64
+    valid_cred = base64.b64encode(b"admin:secret123").decode()
+    auth = client.get("/", headers={"Authorization": f"Basic {valid_cred}"})
+    assert auth.status_code == 200
+
+
+def test_api_key_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ANALYZER_API_KEY", "super-secret-key")
+
+    body = {"code": "x = 1\n", "filename": "a.py"}
+
+    # No key -> 401
+    unauth = client.post("/api/scan", json=body)
+    assert unauth.status_code == 401
+
+    # With X-API-Key -> 200
+    auth = client.post("/api/scan", json=body, headers={"X-API-Key": "super-secret-key"})
+    assert auth.status_code == 200

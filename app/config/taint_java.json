@@ -1,19 +1,63 @@
 {
     "sources": {
         "calls": [
-            "request.getParameter", "request.getParameterValues", "request.getParameterMap",
-            "request.getHeader", "request.getHeaders", "request.getQueryString", "request.getCookies",
-            "request.getInputStream", "request.getReader", "request.getRequestURI", "request.getPathInfo",
-            "HttpServletRequest.getParameter", "HttpServletRequest.getHeader", "HttpServletRequest.getQueryString",
-            "Scanner.nextLine", "Scanner.next", "BufferedReader.readLine", "Console.readLine",
-            "System.getenv", "System.getProperty"
+            "request.getParameter",
+            "request.getParameterValues",
+            "request.getParameterMap",
+            "request.getHeader",
+            "request.getHeaders",
+            "request.getQueryString",
+            "request.getCookies",
+            "request.getInputStream",
+            "request.getReader",
+            "request.getRequestURI",
+            "request.getPathInfo",
+            "HttpServletRequest.getParameter",
+            "HttpServletRequest.getHeader",
+            "HttpServletRequest.getQueryString",
+            "Scanner.nextLine",
+            "Scanner.next",
+            "BufferedReader.readLine",
+            "Console.readLine",
+            "System.getenv",
+            "System.getProperty"
         ],
         "members": [],
-        "parameter_annotations": ["RequestParam", "PathVariable", "RequestBody", "RequestHeader", "CookieValue",
-                                  "QueryParam", "PathParam", "FormParam", "HeaderParam"],
+        "parameter_annotations": [
+            "RequestParam",
+            "PathVariable",
+            "RequestBody",
+            "RequestHeader",
+            "CookieValue",
+            "QueryParam",
+            "PathParam",
+            "FormParam",
+            "HeaderParam"
+        ],
         "main_args": true
     },
     "sanitizers": [
-        "Integer.parseInt", "Integer.valueOf", "Long.parseLong", "Long.valueOf", "UUID.fromString"
-    ]
+        "Integer.parseInt",
+        "Integer.valueOf",
+        "Long.parseLong",
+        "Long.valueOf",
+        "UUID.fromString"
+    ],
+    "sink_sanitizers": {
+        "path": [
+            "FilenameUtils.getName",
+            "File.getName"
+        ],
+        "html": [
+            "HtmlUtils.htmlEscape",
+            "StringEscapeUtils.escapeHtml4",
+            "Encode.forHtml",
+            "Encode.forHtmlAttribute"
+        ],
+        "url": [],
+        "sql": [
+            "ESAPI.encoder().encodeForSQL"
+        ],
+        "command": []
+    }
 }

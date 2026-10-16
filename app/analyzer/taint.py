@@ -1,4 +1,4 @@
-"""Taint tracking cơ bản trong phạm vi một hàm (intra-procedural).
+"""Bounded, call-context-sensitive taint analysis for Python.
 
 Ý tưởng: theo dõi dữ liệu từ NGUỒN không tin cậy (source, vd ``input()``) đi qua
 các biến tới chỗ NGUY HIỂM (sink, vd ``os.system()``). Nếu dữ liệu tới được sink
@@ -17,8 +17,9 @@ Sau đó rule tra nhãn của argument đi vào sink để quyết định mức
 
 Hạn chế (prototype, được ghi rõ có chủ đích):
 
-* không phân tích liên hàm: taint không đi qua lời gọi hàm, giá trị return
-  hay tham số;
+* local named functions support argument/return propagation; dynamic dispatch
+  and cross-file calls use conservative argument propagation;
+* recursion is bounded to 32 active functions and 2000 expansions per file;
 * nhánh rẽ được gộp bảo thủ: phép gán trong ``if``/``for``/``while``/``try``
   có thể THÊM taint nhưng không bao giờ XÓA taint;
 * container được theo dõi như một khối (``d["a"] = tainted`` làm cả ``d`` bị taint).
@@ -237,23 +238,106 @@ class TaintAnalyzer:
             for function in functions:
                 self.sink_sanitizers[function] = self.sink_sanitizers.get(function, frozenset()) | {category}
 
+        # Resolve lexical scopes by AST identity; names alone collide across classes.
+        self.parents = {child: parent for parent in ast.walk(tree)
+                        for child in ast.iter_child_nodes(parent)}
+        self.functions = [n for n in ast.walk(tree)
+                          if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        self.definitions: dict[ast.AST, dict[str, list[ast.AST]]] = {}
+        for function in self.functions:
+            owner = self._scope(function)
+            self.definitions.setdefault(owner, {}).setdefault(function.name, []).append(function)
+        self.current_scope: ast.AST = tree
+        self.active: set[ast.AST] = set()
+        self.returns: list[Label] = []
+        self.module_state: dict[str, Label] = {}
+        self.call_budget = 2000
+
+    def _scope(self, node: ast.AST) -> ast.AST:
+        parent = self.parents.get(node)
+        while parent is not None and not isinstance(parent, _SCOPES):
+            parent = self.parents.get(parent)
+        return parent or self.tree
+
     def analyze(self) -> TaintResult:
-        """Phân tích module, rồi từng class và từng hàm như các scope riêng."""
+        """Analyze bodies on demand with call-specific arguments and bounded recursion."""
         self._run_scope(self.tree.body, {})
-        # Giá trị cấp module (vd CMD = "ls") nhìn thấy được bên trong hàm.
-        module_state = dict(self.state)
+        self.module_state = dict(self.state)
         for node in ast.walk(self.tree):
             if isinstance(node, ast.ClassDef):
-                self._run_scope(node.body, dict(module_state))
+                self.current_scope = node
+                self._run_scope(node.body, dict(self.module_state))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                seed = dict(module_state)
-                # Tham số che biến module cùng tên và có giá trị không rõ (không phân tích liên hàm).
-                for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
-                            node.args.vararg, node.args.kwarg):
-                    if arg is not None:
-                        seed.pop(arg.arg, None)
-                self._run_scope(node.body, seed)
+                self._invoke(node, {}, dict(self.module_state))
+        self.current_scope = self.tree
         return self.result
+
+    def _resolve_local(self, node: ast.Call):
+        # Dynamic receivers/aliases remain conservative unknown calls.
+        if not isinstance(node.func, ast.Name) or node.func.id in self.state:
+            return None
+        scope = self.current_scope
+        while True:
+            candidates = self.definitions.get(scope, {}).get(node.func.id, [])
+            if candidates:
+                return candidates[0] if len(candidates) == 1 else None
+            if scope is self.tree:
+                return None
+            scope = self._scope(scope)
+            # A class namespace is not a lexical scope of its methods.
+            while isinstance(scope, ast.ClassDef):
+                scope = self._scope(scope)
+
+    def _invoke(self, function, bindings: dict[str, Label], initial: dict[str, Label]) -> Label:
+        if function in self.active or len(self.active) >= 32 or (self.call_budget <= 0 and self.active):
+            return taint_only(combine(list(bindings.values())))
+        self.call_budget -= 1
+        saved = self.state, self.current_scope, self.returns
+        self.current_scope, self.returns = function, []
+        self.active.add(function)
+        self.state = dict(initial)
+        for arg in (*function.args.posonlyargs, *function.args.args, *function.args.kwonlyargs,
+                    function.args.vararg, function.args.kwarg):
+            if arg is not None:
+                value = bindings.get(arg.arg)
+                self.state[arg.arg] = value.through(arg.arg) if isinstance(value, TaintInfo) else value
+        try:
+            self._run_block(function.body, in_branch=False)
+            value = combine(self.returns) if self.returns else STATIC
+            return value.through(function.name + "()") if isinstance(value, TaintInfo) else value
+        finally:
+            self.active.remove(function)
+            self.state, self.current_scope, self.returns = saved
+
+    def _call_local(self, function, node: ast.Call, arguments: list[Label]) -> Label:
+        positional = [a.arg for a in (*function.args.posonlyargs, *function.args.args)]
+        bindings = dict(zip(positional, arguments[:len(node.args)]))
+        if function.args.vararg:
+            bindings[function.args.vararg.arg] = combine(arguments[len(positional):len(node.args)])
+        extra = []
+        for keyword, label in zip(node.keywords, arguments[len(node.args):]):
+            if keyword.arg is None:
+                # Unknown **kwargs can populate any parameter.
+                for param in positional + [a.arg for a in function.args.kwonlyargs]:
+                    bindings[param] = join(bindings.get(param), label)
+            elif keyword.arg in positional or keyword.arg in [a.arg for a in function.args.kwonlyargs]:
+                bindings[keyword.arg] = label
+            else:
+                extra.append(label)
+        if function.args.kwarg:
+            bindings[function.args.kwarg.arg] = combine(extra)
+        if any(isinstance(arg, ast.Starred) for arg in node.args):
+            expanded = taint_only(combine(arguments[:len(node.args)]))
+            for param in positional:
+                bindings[param] = join(bindings.get(param), expanded)
+        defaults = dict(zip(positional[-len(function.args.defaults):], function.args.defaults)) if function.args.defaults else {}
+        defaults.update({a.arg: d for a, d in zip(function.args.kwonlyargs, function.args.kw_defaults) if d is not None})
+        for param, default in defaults.items():
+            if param not in bindings:
+                bindings[param] = self.eval(default)
+        owner = self._scope(function)
+        initial = self.state if owner is self.current_scope else self.module_state
+        return self._invoke(function, bindings, initial)
 
     def _run_scope(self, body: list[ast.stmt], initial_state: dict[str, Label]) -> None:
         self.state = initial_state
@@ -264,6 +348,8 @@ class TaintAnalyzer:
     def _run_block(self, body: list[ast.stmt], in_branch: bool) -> None:
         for stmt in body:
             self._run_statement(stmt, in_branch)
+            if isinstance(stmt, (ast.Return, ast.Raise)):
+                break
 
     def _run_statement(self, stmt: ast.stmt, in_branch: bool) -> None:
         """Cập nhật bảng state theo một câu lệnh.
@@ -296,6 +382,8 @@ class TaintAnalyzer:
                 if item.optional_vars is not None:
                     self._bind(item.optional_vars, taint_only(label), in_branch)
             self._run_block(stmt.body, in_branch)
+        elif isinstance(stmt, ast.Return):
+            self.returns.append(self.eval(stmt.value) if stmt.value is not None else STATIC)
         else:
             # If/While/Try/Match/Return/Expr/...: đánh giá các biểu thức của chính
             # câu lệnh, rồi chạy các khối lồng bên trong theo thứ tự mã nguồn.
@@ -339,7 +427,7 @@ class TaintAnalyzer:
     def eval(self, node: ast.expr) -> Label:
         """Nhãn của một biểu thức; kết quả được lưu lại để rule tra cứu sau."""
         label = self._eval(node)
-        self.result.labels[node] = label
+        self.result.labels[node] = join(self.result.labels[node], label) if node in self.result.labels else label
         return label
 
     def _eval(self, node: ast.expr) -> Label:
@@ -401,6 +489,10 @@ class TaintAnalyzer:
         arguments = [self.eval(arg) for arg in node.args]
         arguments += [self.eval(keyword.value) for keyword in node.keywords]
 
+        local_target = self._resolve_local(node)
+        if local_target is not None:
+            return self._call_local(local_target, node, arguments)
+
         # 1) Hàm source: tạo taint mới, vd input() -> TaintInfo(source="input()").
         if name in self.config.source_functions or raw in self.config.source_functions:
             label = f"{raw or name}()"
@@ -417,7 +509,7 @@ class TaintAnalyzer:
             if isinstance(data, TaintInfo):
                 return replace(data.through(f"{name}()"), safe_for=data.safe_for | self.sink_sanitizers[name])
             return None
-        # 4) Hàm không biết: argument hoặc receiver bị taint thì kết quả bị taint
+        # 5) Hàm không biết: argument hoặc receiver bị taint thì kết quả bị taint
         # (user.strip(), "".join(parts), str(x), request.args.get("q")...).
         return taint_only(combine([receiver, *arguments]))
 

@@ -1,0 +1,80 @@
+name: Security Scan (SAST)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  sast:
+    name: SAST Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Secure Code Analyzer (SARIF Output)
+        id: scan
+        run: |
+          set +e
+          python main.py scan app --format sarif -o results.sarif --fail-on CRITICAL
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Save SARIF report as workflow artifact
+        if: ${{ !cancelled() && steps.scan.outputs.status != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-sarif
+          path: results.sarif
+          if-no-files-found: error
+          retention-days: 14
+
+      # Enable this repository variable only after Code Scanning is available.
+      # The scan and its exit-code gate run independently of this integration.
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif
+          category: secure-code-analyzer
+        if: >-
+          ${{ !cancelled() && hashFiles('results.sarif') != '' &&
+              vars.CODE_SCANNING_ENABLED == 'true' &&
+              (github.event_name != 'pull_request' ||
+               github.event.pull_request.head.repo.full_name == github.repository) }}
+
+      - name: Explain artifact-only reporting
+        if: >-
+          ${{ !cancelled() && hashFiles('results.sarif') != '' &&
+              (vars.CODE_SCANNING_ENABLED != 'true' ||
+               (github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.full_name != github.repository)) }}
+        run: |
+          echo '### Security scan report' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Download results.sarif from the security-scan-sarif artifact.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Code Scanning upload is skipped unless CODE_SCANNING_ENABLED=true and the run is not a fork pull request. The scan exit-code gate still applies.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce scan result
+        if: ${{ !cancelled() && steps.scan.outputs.status != '' }}
+        env:
+          SCAN_STATUS: ${{ steps.scan.outputs.status }}
+        run: exit "$SCAN_STATUS"

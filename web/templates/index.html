@@ -3,7 +3,7 @@
 <div class="row justify-content-center">
   <div class="col-lg-9">
     <h1 class="h3 mb-1">Secure Code Analyzer</h1>
-    <p class="text-secondary">
+    <p class="text-secondary" data-i18n="home_intro" data-i18n-params='{"count":{{ rule_count }}}'>
       Detect insecure coding patterns in <strong>Python, Java, C# and PHP</strong> source code using syntax-tree
       analysis, a rule engine ({{ rule_count }} rules) and basic taint tracking.
     </p>
@@ -16,33 +16,38 @@
           data-max-file-kb="{{ limits.max_file_kb }}" data-extensions="{{ limits.extensions|replace(' ', '') }}" data-max-files="{{ limits.max_files }}"
           data-max-folder-files="{{ limits.max_folder_files }}" data-max-request-mb="{{ limits.max_request_mb }}"
           data-excluded-dirs="{{ limits.excluded_dirs }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token or '' }}">
       <div class="card-header">
         <ul class="nav nav-tabs card-header-tabs" role="tablist">
           <li class="nav-item">
             <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button" role="tab">
-              <i class="bi bi-upload"></i> Upload Source File</button>
+              <i class="bi bi-upload"></i> <span data-i18n="upload_source_file">Upload Source File</span></button>
           </li>
           <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-folder" type="button" role="tab">
-              <i class="bi bi-folder2-open"></i> Upload Folder</button>
+              <i class="bi bi-folder2-open"></i> <span data-i18n="upload_folder">Upload Folder</span></button>
           </li>
           <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-paste" type="button" role="tab">
-              <i class="bi bi-code-slash"></i> Paste Code</button>
+              <i class="bi bi-code-slash"></i> <span data-i18n="paste_code">Paste Code</span></button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" id="scan-history-tab" data-bs-toggle="tab" data-bs-target="#tab-history" type="button" role="tab" aria-controls="tab-history">
+              <i class="bi bi-clock-history"></i> <span data-i18n="scan_history">Scan history</span></button>
           </li>
         </ul>
       </div>
       <div class="card-body tab-content">
         <div class="tab-pane fade show active" id="tab-upload" role="tabpanel">
-          <label for="files" class="form-label">Source files (Python, Java, C#, PHP)</label>
+          <label for="files" class="form-label" data-i18n="source_files">Source files (Python, Java, C#, PHP)</label>
           <input class="form-control" type="file" id="files" name="files" accept="{{ limits.extensions|replace(' ', '') }}" multiple>
-          <div class="form-text">
+          <div class="form-text" data-i18n="upload_limits" data-i18n-params='{"files":{{ limits.max_files }},"size":{{ limits.max_file_kb }},"extensions":"{{ limits.extensions }}"}'>
             Up to {{ limits.max_files }} files, {{ limits.max_file_kb }} KB each. Accepted: <code>{{ limits.extensions }}</code>.
           </div>
           <ul id="file-list" class="list-unstyled small mt-2 mb-0"></ul>
         </div>
         <div class="tab-pane fade" id="tab-folder" role="tabpanel">
-          <label for="folder" class="form-label">Project folder</label>
+          <label for="folder" class="form-label" data-i18n="project_folder">Project folder</label>
           <input class="form-control" type="file" id="folder" webkitdirectory directory multiple>
           <div class="form-text">
             Every {{ limits.extensions }} file in the folder and its sub-folders is scanned (up to
@@ -54,7 +59,7 @@
         <div class="tab-pane fade" id="tab-paste" role="tabpanel">
           <div class="row g-2 mb-2">
             <div class="col-sm-4">
-              <label for="language" class="form-label">Language</label>
+              <label for="language" class="form-label" data-i18n="code_language">Language</label>
               <select class="form-select form-select-sm" id="language" name="language">
                 <option value="python" selected>Python</option>
                 <option value="java">Java</option>
@@ -63,20 +68,43 @@
               </select>
             </div>
             <div class="col-sm-8">
-              <label for="filename" class="form-label">File name</label>
+              <label for="filename" class="form-label" data-i18n="file_name">File name</label>
               <input class="form-control form-control-sm" id="filename" name="filename" value="pasted_code.py" maxlength="100">
             </div>
           </div>
-          <label for="code" class="form-label">Source code</label>
+          <label for="code" class="form-label" data-i18n="source_code">Source code</label>
           <textarea class="form-control font-monospace code-input" id="code" name="code" rows="14"
                     spellcheck="false" placeholder="import os&#10;command = input('Command: ')&#10;os.system(command)">{{ code or "" }}</textarea>
         </div>
+        <div class="tab-pane fade" id="tab-history" role="tabpanel" aria-labelledby="scan-history-tab">
+          {% if scan_history %}
+          <div class="scan-history-list">
+            {% for scan_id, item in scan_history %}
+            <article class="scan-history-row">
+              <div class="scan-history-description">
+                <strong class="text-break">{{ item.target }}</strong>
+                <span class="small text-secondary"><i class="bi bi-clock"></i> {{ item.started_at|replace('T', ' ') }} &middot; {{ item.files_scanned }} <span data-i18n="files_scanned_lower">files</span> &middot; {{ item.duration_ms }} ms</span>
+                <span class="small text-secondary">{{ item.findings|length }} <span data-i18n="findings_lower">findings</span></span>
+              </div>
+              <button type="button" class="btn btn-outline-primary btn-sm history-details-trigger" data-scan-id="{{ scan_id }}" data-i18n="view_details">
+                View details
+              </button>
+            </article>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="history-empty text-center text-secondary py-5">
+            <i class="bi bi-clock-history display-6 d-block mb-2"></i>
+            <span data-i18n="history_empty">No scans yet. Your completed scans will appear here.</span>
+          </div>
+          {% endif %}
+        </div>
         <div id="client-error" class="alert alert-warning mt-3 d-none" role="alert"></div>
       </div>
-      <div class="card-footer d-flex justify-content-between align-items-center">
-        <span class="small text-secondary"><i class="bi bi-info-circle"></i>
+      <div class="card-footer d-flex justify-content-between align-items-center" id="scan-form-footer">
+          <span class="small text-secondary" data-i18n="privacy_notice"><i class="bi bi-info-circle"></i>
           The code is parsed as text/AST only. It is not executed or saved as a file.</span>
-        <button class="btn btn-primary" type="submit" id="scan-button"><i class="bi bi-search"></i> Start Scan</button>
+        <button class="btn btn-primary" type="submit" id="scan-button" data-i18n="start_scan"><i class="bi bi-search"></i> Start Scan</button>
       </div>
     </form>
   </div>

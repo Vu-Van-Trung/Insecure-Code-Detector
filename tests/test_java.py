@@ -246,3 +246,33 @@ def test_syntax_error_is_reported(engine):
 def test_comment_and_string_are_not_code(java):
     code = '// Runtime.getRuntime().exec(request.getParameter("x"));\nString s = "Runtime.getRuntime().exec(x)";'
     assert java(code, "JV001") == []
+
+
+def test_generic_encoder_does_not_sanitize_sql(java):
+    code = """
+    String id = request.getParameter("id");
+    String safeId = Codec.encode(id);
+    String q = "SELECT * FROM users WHERE id = " + safeId;
+    Statement st = conn.createStatement();
+    st.executeQuery(q);
+    """
+    [finding] = java(code, "JV002")
+    assert finding.severity is Severity.CRITICAL
+    assert finding.confidence >= 0.9
+
+
+def test_inter_procedural_call_in_java(java):
+    code = """
+    class Controller {
+        void executeCmd(String c) throws Exception {
+            Runtime.getRuntime().exec(c);
+        }
+        void handle(HttpServletRequest req) throws Exception {
+            executeCmd(req.getParameter("p"));
+        }
+    }
+    """
+    findings = java(code, "JV001", wrap=False)
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+    assert findings[0].source == "req.getParameter()"

@@ -8,6 +8,7 @@ from app.models.finding import ScanResult
 from app.reports.csv_report import render_csv
 from app.reports.html_report import render_html
 from app.reports.json_report import render_json
+from app.reports.sarif_report import render_sarif
 
 # Định dạng -> (hàm render, media type cho HTTP response, extension của file tải về).
 # Thêm một định dạng mới chỉ cần viết hàm render và thêm một dòng vào đây;
@@ -16,6 +17,7 @@ REPORT_FORMATS: dict[str, tuple[Callable[[ScanResult], str], str, str]] = {
     "json": (render_json, "application/json", "json"),
     "csv": (render_csv, "text/csv", "csv"),
     "html": (render_html, "text/html", "html"),
+    "sarif": (render_sarif, "application/sarif+json", "sarif"),
 }
 
 

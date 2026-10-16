@@ -1,4 +1,4 @@
-"""Taint tracking cơ bản trong phạm vi một method (intra-procedural) cho Java và C#.
+"""Bounded, call-context-sensitive taint analysis for Java and C#.
 
 Cùng mô hình với analyzer Python (app/analyzer/taint.py): mỗi biểu thức trong
 method nhận nhãn TaintInfo (không tin cậy), STATIC (hằng số) hoặc None (không
@@ -10,8 +10,9 @@ Source (cấu hình riêng cho từng ngôn ngữ trong app/config/taint_<langua
 * thuộc tính:   Request.Query, Request.Form, request.getParameterMap ...
 * tham số:      có annotation @RequestParam / [FromQuery] ..., và ``args`` của main()
 
-Hạn chế: không phân tích liên hàm; field chỉ được khởi tạo với giá trị hằng
-ban đầu; sanitizer làm giảm confidence nhưng không bao giờ được tin hoàn toàn.
+Local calls use class identity and arity. Ambiguous overloads and calls outside
+the file retain conservative argument propagation. Recursion is bounded to 32
+active methods and 2000 expansions per file. Fields retain constant initializers.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ class TSTaintConfig:
     source_annotations: frozenset[str] = frozenset()  # vd "RequestParam", "FromQuery"
     main_args: bool = True                            # coi args của main() là source
     sanitizers: frozenset[str] = frozenset()
+    sink_sanitizers: dict[str, frozenset[str]] = field(default_factory=dict, hash=False)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], where: str = "taint configuration") -> TSTaintConfig:
@@ -53,6 +55,9 @@ class TSTaintConfig:
         main_args = sources.get("main_args", True)
         if not isinstance(main_args, bool):
             raise ConfigError(f"'main_args' in {where} must be true or false")
+        sink_sanitizers = data.get("sink_sanitizers", {})
+        if not isinstance(sink_sanitizers, dict):
+            raise ConfigError(f"'sink_sanitizers' in {where} must be an object")
         return cls(
             source_calls=frozenset(get_string_list(sources, "calls", where)),
             source_members=frozenset(get_string_list(sources, "members", where)),
@@ -60,6 +65,10 @@ class TSTaintConfig:
             source_annotations=frozenset(get_string_list(sources, "parameter_annotations", where)),
             main_args=main_args,
             sanitizers=frozenset(get_string_list(data, "sanitizers", where)),
+            sink_sanitizers={
+                category: frozenset(get_string_list(sink_sanitizers, category, where))
+                for category in sink_sanitizers
+            },
         )
 
     @classmethod
@@ -110,35 +119,95 @@ class TSTaintAnalyzer:
         self.result = TSTaintResult(ctx)
         # Tên biến -> nhãn hiện tại trong method đang phân tích.
         self.state: dict[str, Label] = {}
+        # Đảo bảng: tên hàm/sanitizer -> các loại sink nó làm sạch (để tra cứu nhanh).
+        self.sink_sanitizers: dict[str, frozenset[str]] = {}
+        for category, functions in config.sink_sanitizers.items():
+            for function in functions:
+                self.sink_sanitizers[function] = self.sink_sanitizers.get(function, frozenset()) | {category}
+
+        self.active: set[int] = set()
+        self.returns: list[Label] = []
+        self.current_method = None
+        self.call_budget = 2000
+        self.field_seed: dict[str, Label] = {}
+        self.method_index: dict[tuple[int, str, int], list[Any]] = {}
+        self.owners = {}
+        self.method_names = {method.name for method in ctx.methods}
+        for method in ctx.methods:
+            owner = self._owner(method.node)
+            self.owners[method.node.id] = owner
+            if owner is not None:
+                key = (owner.id, method.name, len(method.params))
+                self.method_index.setdefault(key, []).append(method)
+
+    def _owner(self, node):
+        node = node.parent
+        while node is not None:
+            if node.type in self.adapter.class_types and node.type != "class_body":
+                return node
+            node = node.parent
+        return None
 
     def analyze(self) -> TSTaintResult:
-        # Field của class: chỉ giữ giá trị khởi tạo là hằng số (hằng của class).
-        seed: dict[str, Label] = {}
         for declaration in self.ctx.declarations:
             if declaration.is_field and declaration.value is not None:
                 self.state = {}
                 label = self.eval(declaration.value)
-                seed[declaration.name] = label if label is STATIC else None
+                self.field_seed[declaration.name] = label if label is STATIC else None
         # Biến toàn cục chứa dữ liệu request ($_GET, $_POST...): nhìn thấy ở mọi nơi.
         for name in self.config.source_variables:
-            seed[name] = TaintInfo(source=name, path=(name,))
+            self.field_seed[name] = TaintInfo(source=name, path=(name,))
         if self.adapter.top_level_code:
             # Script PHP: code nằm ngay cấp file (ngoài mọi hàm) cũng được chạy.
-            self.state = dict(seed)
+            self.state = dict(self.field_seed)
             for child in self.ctx.root.named_children:
                 self._run(child, in_branch=False)
         for method in self.ctx.methods:
-            self.state = dict(seed)
-            for param in method.params:
-                # Tham số che field cùng tên; mặc định không rõ nguồn...
-                self.state.pop(param.name, None)
-                # ...trừ khi là tham số nhận dữ liệu từ request (@RequestParam, [FromQuery]...).
-                source = self._parameter_source(method.name, param)
-                if source:
-                    self.state[param.name] = TaintInfo(source=source, path=(source, param.name))
-            if method.body is not None:
-                self._run(method.body, in_branch=False)
+            self._invoke(method, [None] * len(method.params))
         return self.result
+
+    def _resolve_local(self, call):
+        if call.is_constructor or call.method not in self.method_names:
+            return None
+        owner = self._owner(call.node)
+        if call.receiver_text not in (None, "this"):
+            type_name = call.receiver_type or call.receiver_text
+            matches = {o.id: o for o in self.owners.values() if o is not None
+                       and self.adapter.text(o.child_by_field_name("name")) == type_name}
+            if len(matches) != 1:
+                return None
+            owner = next(iter(matches.values()))
+        if owner is None:
+            return None
+        candidates = self.method_index.get((owner.id, call.method, len(call.args)), [])
+        # Same-arity overloads require type resolution; do not guess a body.
+        return candidates[0] if len(candidates) == 1 else None
+
+    def _invoke(self, method, arguments: list[Label]) -> Label:
+        if method.body is None:
+            return taint_only(combine(arguments))
+        if method.node.id in self.active or len(self.active) >= 32 or (self.call_budget <= 0 and self.active):
+            return taint_only(combine(arguments))
+        self.call_budget -= 1
+        saved = self.state, self.current_method, self.returns
+        self.current_method, self.returns = method, []
+        self.state = dict(self.field_seed)
+        self.active.add(method.node.id)
+        for param, value in zip(method.params, arguments):
+            source = self._parameter_source(method.name, param)
+            if source:
+                value = join(value, TaintInfo(source=source, path=(source,)))
+            self.state[param.name] = value.through(param.name) if isinstance(value, TaintInfo) else value
+        try:
+            if method.body.type == "arrow_expression_clause":
+                self.returns.append(self.eval(method.body))
+            else:
+                self._run(method.body, in_branch=False)
+            value = combine(self.returns) if self.returns else STATIC
+            return value.through(method.name + "()") if isinstance(value, TaintInfo) else value
+        finally:
+            self.active.remove(method.node.id)
+            self.state, self.current_method, self.returns = saved
 
     def _parameter_source(self, method_name: str, param: Any) -> str | None:
         """Tên source nếu tham số nhận dữ liệu không tin cậy, ngược lại None."""
@@ -188,6 +257,11 @@ class TSTaintAnalyzer:
                 else:
                     self.eval(child)
             return
+        if node.type == "return_statement":
+            values = [self.eval(child) for child in node.named_children
+                      if child.type not in adapter.comment_types]
+            self.returns.append(combine(values) if values else STATIC)
+            return
         if adapter.is_statement(node) or node.type in adapter.branch_types:
             # if/while/try...: khối con là nhánh có điều kiện; biểu thức (điều kiện...) được đánh giá.
             branch = in_branch or node.type in adapter.branch_types
@@ -195,6 +269,8 @@ class TSTaintAnalyzer:
                 if adapter.is_statement(child) or child.type in adapter.branch_types \
                         or adapter.declarations(child) is not None:
                     self._run(child, branch)
+                    if child.type in {"return_statement", "throw_statement"}:
+                        break
                 else:
                     self.eval(child)
             return
@@ -238,7 +314,7 @@ class TSTaintAnalyzer:
     def eval(self, node: Node) -> Label:
         """Nhãn của một biểu thức; kết quả được lưu theo node.id để rule tra cứu."""
         label = self._eval(node)
-        self.result.labels[node.id] = label
+        self.result.labels[node.id] = join(self.result.labels[node.id], label) if node.id in self.result.labels else label
         return label
 
     def _eval(self, node: Node) -> Label:
@@ -327,16 +403,43 @@ class TSTaintAnalyzer:
         arguments = [self.eval(arg) for arg in call.args]
         # Giá trị trong object initializer của C# (new T { Prop = value }) cũng là "đầu vào".
         arguments += [self.eval(value) for value in call.initializer.values()]
+        local = self._resolve_local(call)
+        if local is not None:
+            bound = arguments[:len(call.args)]
+            if self.ctx.language == "csharp":
+                argument_list = call.node.child_by_field_name("arguments")
+                raw_args = [n for n in argument_list.named_children if n.type == "argument"] if argument_list else []
+                indexes = {p.name: i for i, p in enumerate(local.params)}
+                bound = [None] * len(local.params)
+                for position, (arg, value) in enumerate(zip(raw_args, arguments)):
+                    name = arg.child_by_field_name("name")
+                    index = indexes.get(self.adapter.text(name)) if name is not None else position
+                    if index is None or index >= len(bound):
+                        return taint_only(combine(arguments))
+                    bound[index] = value
+            return self._invoke(local, bound)
         if call.names & self.config.source_calls:
             label = f"{call.receiver_text}.{call.method}()" if call.receiver_text else f"{call.method}()"
             return TaintInfo(source=label, path=(label,))
         # sorted() để chọn sanitizer ổn định nếu tên lời gọi khớp nhiều mục.
         sanitizer = next(iter(sorted(call.names & self.config.sanitizers)), None)
         if sanitizer:
-            data = combine(arguments)
+            data = combine([receiver, *arguments])
             if isinstance(data, TaintInfo):
                 return replace(data.through(f"{sanitizer}()"), sanitizer=sanitizer)
             return None
+        # Sanitizer theo loại sink (vd FilenameUtils.getName cho path, HtmlUtils.htmlEscape cho html).
+        sink_categories = frozenset()
+        matched_sink_sanitizer = None
+        for name in sorted(call.names):
+            if name in self.sink_sanitizers:
+                sink_categories |= self.sink_sanitizers[name]
+                matched_sink_sanitizer = matched_sink_sanitizer or name
+        if sink_categories:
+            data = combine([receiver, *arguments])
+            if isinstance(data, TaintInfo):
+                step = f"{matched_sink_sanitizer or call.method}()"
+                return replace(data.through(step), safe_for=data.safe_for | sink_categories)
         # Lời gọi không biết: taint của receiver hoặc argument chảy vào kết quả.
         return taint_only(combine([receiver, *arguments]))
 

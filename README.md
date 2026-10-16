@@ -20,10 +20,10 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 
 | Thành phần | Mô tả |
 |---|---|
-| Core Analyzer | Parser, Rule Engine, Taint Tracking. Phần Python chỉ dùng thư viện chuẩn; Java/C#/PHP dùng tree-sitter. Độc lập với Web UI |
-| CLI | `python main.py scan <file_or_directory>` — dùng được trong CI/CD (exit code) |
-| Web UI | FastAPI + Bootstrap 5 + Chart.js tại `http://127.0.0.1:8000` |
-| Report | JSON, CSV, HTML |
+| Core Analyzer | Parser, Rule Engine, Taint Tracking (hỗ trợ inter-procedural nội bộ file). Phần Python chỉ dùng thư viện chuẩn; Java/C#/PHP dùng tree-sitter. Độc lập với Web UI |
+| CLI | `python main.py scan <file_or_directory>` — dùng được trong CI/CD (exit code, SARIF output) |
+| Web UI | FastAPI + Bootstrap 5 + Chart.js tại `http://127.0.0.1:8000` (có CSRF protection, hỗ trợ Basic Auth / API Key) |
+| Report | JSON, CSV, HTML, SARIF (v2.1.0 cho GitHub Code Scanning) |
 
 Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/SonarQube/CodeQL làm engine.
 
@@ -32,19 +32,19 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 - **49 security rules**: 18 cho Python, 9 cho Java, 9 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
 - **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
   `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
-- **Taint tracking** intra-procedural cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
+- **Taint tracking** (hỗ trợ inter-procedural trong file/class) cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
   (vd `@RequestParam -> name -> sql -> Statement.executeQuery()`, `[FromQuery] -> host -> Process.Start()`).
 - **Sanitizer** cấu hình được (`shlex.quote`, `int`, ...). Luồng đã sanitize vẫn được báo ở mức LOW.
-  **Sanitizer theo loại sink** (`secure_filename` cho path, `html.escape` cho HTML) chỉ làm sạch cho đúng
-  loại sink đó.
+  **Sanitizer theo loại sink** (`secure_filename` cho path, `html.escape` cho HTML) hỗ trợ cho cả Python, Java và C#.
 - **Severity theo ngữ cảnh**: cùng `os.system()` nhưng `input()` → CRITICAL, hằng số → LOW.
 - **Whitelist** (file, rule, secret, comment `# analyzer-ignore`) và **Blacklist** (JSON).
 - **Web UI**: upload nhiều file `.py`/`.java`/`.cs`/`.php`, upload **cả thư mục** (tối đa 1000 file nguồn, 20 MB) hoặc paste code (chọn ngôn ngữ), dashboard, biểu đồ,
-  chi tiết finding, export report.
-- **Bảo mật của chính ứng dụng**: không thực thi code upload, không ghi file upload xuống đĩa,
-  chống path traversal, giới hạn kích thước/số lượng/extension, CSP, escape toàn bộ output.
+  chi tiết finding, export report (JSON, CSV, HTML, SARIF).
+- **Bảo mật của chính ứng dụng**: CSRF protection (token có chữ ký, bắt buộc cho form scan), tuỳ chọn xác thực HTTP Basic Auth & API Key,
+  không thực thi code upload, không ghi file upload xuống đĩa, chống path traversal, giới hạn kích thước/số lượng/extension, CSP, escape toàn bộ output.
+- **CI/CD Integration**: Xuất chuẩn SARIF v2.1.0 và template GitHub Actions (`.github/workflows/security-scan.yml`).
 - **Logging** vào `logs/analyzer.log` (chỉ metadata, không log source code hay secret).
-- **717 unit test** (pytest).
+- **Kiểm thử tự động** bằng pytest; chạy `python -m pytest -q` để xem kết quả hiện tại.
 
 ## 3. Kiến trúc
 
@@ -191,7 +191,7 @@ python main.py rules
 | `--min-confidence 0.7` | Ẩn finding có confidence thấp hơn |
 | `--fail-on HIGH` | Chỉ trả exit code 1 khi có finding ≥ HIGH (dùng cho CI/CD) |
 
-Exit code: `0` không có finding (vượt ngưỡng `--fail-on`), `1` có finding, `2` lỗi sử dụng/cấu hình.
+Exit code: `0` không có finding (vượt ngưỡng `--fail-on`), `1` có finding, `2` lỗi sử dụng/cấu hình hoặc lỗi phân tích file.
 
 ## 7. Danh sách rule
 
@@ -418,7 +418,7 @@ File tạm của test nằm trong `.tmp/` của project (không dùng thư mục
 
 ```text
 $ python main.py scan samples/vulnerable/sql_vulnerable.py
-Secure Code Analyzer v1.0.0
+Secure Code Analyzer v1.1
 
 Scanning: samples/vulnerable/sql_vulnerable.py
 
@@ -454,11 +454,9 @@ triển khai chúng. Mọi secret trong đó là giá trị giả.
 
 ## 13. Hạn chế
 
-- **Không có phân tích liên hàm (inter-procedural)**: `run(input())` với `def run(cmd): os.system(cmd)`
-  chỉ được báo HIGH (argument không rõ nguồn), không lên CRITICAL.
+- **Phân tích liên hàm xuyên file/module**: Đã hỗ trợ phân tích liên hàm (inter-procedural) trong cùng một file/class (lan truyền taint qua tham số hàm gọi và giá trị trả về của hàm helper); tuy nhiên chưa phân tích đồ thị gọi (call graph) xuyên qua nhiều file/module khác nhau.
 - Nhánh điều kiện được hợp nhất bảo thủ; không phân tích đường đi (path-sensitive).
 - Container được theo dõi như một khối (`d["a"] = tainted` → cả `d` bị taint).
-- Sanitizer không phân biệt theo loại sink.
 - Chỉ nhận diện API theo tên đầy đủ; đối tượng mà kiểu không suy ra được (vd `session.get(..., verify=False)`)
   được xử lý bằng heuristic với confidence thấp hơn.
 - PY007 dựa vào tên biến và entropy nên vẫn có thể bỏ sót hoặc báo nhầm.
@@ -474,19 +472,104 @@ triển khai chúng. Mọi secret trong đó là giá trị giả.
 - PHP: không theo dõi dữ liệu qua `include` giữa các file (vd DVWA gán `$file = $_GET['page']` ở `low.php`
   rồi `include($file)` ở `index.php`: chỉ báo MEDIUM), không theo dõi `$_SESSION` và dữ liệu đọc từ database
   (stored XSS), không phân tích JavaScript trong trang.
-- Web UI không có xác thực người dùng; chỉ nên chạy trên `127.0.0.1`. Bootstrap/Chart.js tải từ CDN
-  (cần Internet khi mở trang).
+- Bootstrap/Chart.js tải từ CDN (cần Internet khi mở trang).
 - Static analysis có thể có false positive và false negative — mọi finding cần được review.
 
 ## 14. Hướng phát triển
 
-- Phân tích liên hàm và giữa các module (call graph), phân tích path-sensitive.
+- Phân tích liên hàm xuyên các module và package lớn (inter-module call graph), phân tích path-sensitive.
 - Thêm ngôn ngữ khác qua tree-sitter (JavaScript/TypeScript, PHP, Go): chỉ cần một adapter và bộ rule mới.
 - Phân giải kiểu Java/C# đầy đủ hơn (đọc `import`/`using`, kiểu trả về của method).
-- Mở rộng sanitizer theo loại sink cho command / SQL (hiện có path / HTML / URL).
 - Thêm rule: JWT không verify, `assert` dùng cho kiểm tra bảo mật, zip slip (`extractall`), open redirect;
   quét file template Jinja2/Django (`|safe`, `autoescape false`).
-- Output SARIF để tích hợp GitHub Code Scanning; pre-commit hook.
 - Lưu lịch sử scan bằng SQLite + SQLAlchemy, so sánh giữa các lần scan.
 - Xuất PDF; tự host Bootstrap/Chart.js kèm Subresource Integrity để chạy offline.
-- Xác thực người dùng và CSRF token nếu triển khai Web UI cho nhiều người dùng.
+
+## 15. Phạm vi và vận hành các tính năng bổ sung
+
+### Phân tích liên hàm
+
+Analyzer phân tích lời gọi cục bộ theo từng bộ đối số, truyền taint qua tham số
+và giá trị trả về. Các lần gọi với dữ liệu sạch và dữ liệu không tin cậy không
+dùng chung một return summary. Nhãn tại sink được gộp bảo thủ từ các ngữ cảnh gọi.
+
+- Python: hỗ trợ hàm gọi trực tiếp bằng tên, hàm lồng, đối số theo tên,
+  giá trị mặc định và lan truyền bảo thủ qua `*args` / `**kwargs`.
+- Java/C#: đối chiếu lớp chứa method, receiver và số tham số; hỗ trợ return trong
+  block và expression-bodied method của C#.
+- Giới hạn: tối đa 32 hàm đang mở rộng và 2.000 lần mở rộng trong một file.
+  Đệ quy quay lại hàm đang phân tích, lời gọi không xác định hoặc vượt giới hạn
+  dùng lan truyền bảo thủ từ đối số; có thể bỏ sót nguồn/sink bên trong callee.
+- Chưa phân tích xuyên file, dispatch động/alias hàm, tác dụng phụ lên field/global,
+  closure thoát khỏi scope hoặc phân giải overload có cùng số tham số.
+  C# optional arguments và Java varargs chưa được phân giải đầy đủ.
+
+### Sanitizer theo loại sink
+
+Cấu hình Java/C# dùng `sink_sanitizers` tương tự Python. Chỉ danh mục đúng với
+sink mới được dùng để giảm mức cảnh báo; SQL và command vẫn giữ finding LOW
+để người dùng kiểm tra. Dữ liệu sạch cho SQL không tự động sạch cho command.
+Khi ghép dữ liệu đã xử lý với đầu vào chưa xử lý, phần chưa xử lý vẫn quyết định
+mức nguy hiểm.
+
+Các API parse/encode URL không xác minh host, IP hoặc giao thức, nên không được
+coi là sanitizer chống SSRF. Chuẩn hóa đường dẫn cũng không chứng minh đường dẫn
+nằm trong thư mục cho phép. `Codec.encode` và `SqlParameter` không được coi là
+sanitizer cho chuỗi SQL ghép nối. Tham số hóa SQL phải truyền giá trị tách khỏi query.
+
+Các danh mục HTML/path của Java/C# lưu metadata taint cho cấu hình mở rộng;
+bộ rule Java/C# hiện tại chưa có sink XSS/path/SSRF tương ứng.
+
+### CSRF cho Web UI
+
+POST `/scan` luôn yêu cầu token hợp lệ, kể cả khi request không gửi cookie.
+GET `/` cấp token ngẫu nhiên có chữ ký HMAC và đưa token vào form. Client tự động
+phải GET trang chủ trước, giữ cookie, rồi gửi token qua trường `csrf_token`
+hoặc header `X-CSRF-Token`. Cookie là HttpOnly, SameSite=Strict và có Secure khi
+truy cập HTTPS. Origin/Referer khác nguồn hoặc Fetch Metadata cross-site bị từ chối.
+
+Nếu chạy nhiều worker, đặt cùng `ANALYZER_CSRF_SECRET` ngẫu nhiên, dài ít nhất
+32 byte, cho mọi worker. Nếu không cấu hình, mỗi app có secret ngẫu nhiên riêng;
+sau khi khởi động lại cần tải lại form. Authentication nằm ngoài phạm vi đợt sửa này.
+Tham khảo [hướng dẫn CSRF của OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
+
+### SARIF và CI
+
+`python main.py scan app --format sarif -o results.sarif --fail-on CRITICAL`
+xuất báo cáo cho mã ứng dụng. Workflow mẫu scan `app` để không đưa các mẫu cố ý
+có lỗ hổng trong `tests` và `samples` vào kết quả CI.
+
+Workflow lưu mã thoát, tải SARIF nếu báo cáo tồn tại, rồi trả lại mã thoát của
+analyzer: 0 = thành công dưới ngưỡng, 1 = có finding đạt ngưỡng, 2 = lỗi cấu hình,
+đầu vào hoặc lỗi phân tích file. Lỗi phân tích cũng được ghi vào
+`invocations[].executionSuccessful` và thông báo trong SARIF.
+
+Đường dẫn được mã hóa URI, relative path có base URI, rule tùy chỉnh có descriptor.
+Taint path hiện chỉ lưu tên bước, chưa lưu tọa độ từng bước; SARIF chỉ gắn tọa độ
+thật cho sink. Việc upload vẫn cần quyền GitHub Code Scanning phù hợp với repository.
+Tham khảo [SARIF support của GitHub](https://docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support).
+
+#### Repository chưa bật Code Scanning
+
+Workflow luôn lưu `results.sarif` vào artifact **security-scan-sarif** (giữ 14 ngày).
+Mở **Actions → lần chạy → Artifacts** để tải báo cáo, không cần bật Code Scanning.
+Bước kiểm tra mã thoát vẫn làm CI thất bại khi có finding CRITICAL hoặc lỗi scan;
+không bỏ qua các lỗi này để làm checks xanh.
+
+Upload vào tab **Security / Code scanning** là tích hợp tùy chọn:
+
+1. Bật tính năng Code Scanning/GitHub Code Security phù hợp với repository trong
+   **Settings → Advanced Security**. Repository private/internal cần quyền sử dụng
+   tính năng tương ứng; chỉ thêm quyền vào workflow không thay thế việc bật tính năng.
+2. Vào **Settings → Secrets and variables → Actions → Variables**, tạo repository
+   variable `CODE_SCANNING_ENABLED` với giá trị `true`.
+3. Push thay đổi workflow hoặc chạy lại workflow trên phiên bản đã cập nhật.
+
+Workflow dùng `github/codeql-action/upload-sarif@v4`, giữ quyền
+`security-events: write`, và bỏ qua upload Code Scanning đối với PR từ fork.
+Khi đã bật variable, lỗi upload vẫn được báo là lỗi CI để phát hiện cấu hình sai.
+Nếu variable chưa đặt hoặc khác `true`, workflow chỉ lưu artifact và ghi rõ lý do
+trong phần summary. Cảnh báo deprecation v3 không phải nguyên nhân của lỗi
+`Code scanning is not enabled for this repository`.
+
+Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/integrate-with-existing-tools/upload-sarif-file).

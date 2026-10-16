@@ -57,9 +57,13 @@ class TSRule(SecurityRule):
 
     # Finding được chấm điểm bằng SecurityRule.graded_finding / tainted_finding, giống rule Python.
 
-    def worst_argument(self, args: Iterable[Node], ctx: TSContext) -> tuple[ArgumentKind, TaintInfo | None]:
+    def worst_argument(self, args: Iterable[Node], ctx: TSContext, category: str | None = None) -> tuple[ArgumentKind, TaintInfo | None]:
         """Argument "tệ nhất" trong danh sách (vd lệnh shell ghép từ nhiều phần)."""
         graded = [classify_argument(arg, ctx) for arg in args]
+        if category:
+            graded = [(ArgumentKind.SANITIZED, info)
+                      if info is not None and category in info.safe_for else (kind, info)
+                      for kind, info in graded]
         if not graded:
             return ArgumentKind.DYNAMIC, None
         return min(graded, key=lambda item: _KIND_ORDER[item[0]])
@@ -128,7 +132,9 @@ class CommandRuleBase(TSRule):
             return None
         # Chạy qua shell: xét các argument còn lại (bỏ cờ -c, /c).
         rest = [arg for arg in program[1:] if (string_value(ctx, arg) or "") not in SHELL_FLAGS]
-        kind, info = self.worst_argument(rest, ctx)
+        kind, info = self.worst_argument(rest, ctx, "command")
+        if info is not None and "command" in info.safe_for:
+            kind = ArgumentKind.SANITIZED
         return self.graded_finding(
             node, ctx, kind, info, sink,
             dynamic_message=f"{sink} runs a dynamically built command through a shell.",
@@ -139,6 +145,8 @@ class CommandRuleBase(TSRule):
     def grade_command_line(self, node: Node, ctx: TSContext, command: Node, sink: str) -> Finding | None:
         """Một chuỗi lệnh duy nhất (Runtime.exec(String), Process.Start(string))."""
         kind, info = classify_argument(command, ctx)
+        if info is not None and "command" in info.safe_for:
+            kind = ArgumentKind.SANITIZED
         return self.graded_finding(
             node, ctx, kind, info, sink,
             dynamic_message=f"{sink} runs a dynamically built command line.",
@@ -191,6 +199,9 @@ class SqlRuleBase(TSRule):
         if kind in (ArgumentKind.TAINTED, ArgumentKind.SANITIZED):
             if not likely_db and not SQL_KEYWORDS.search(" ".join(string_parts(ctx, query))):
                 return None
+            if info is not None and "sql" in info.safe_for:
+                return self.sanitized_finding(
+                    node, ctx, info, sink)
             if kind is ArgumentKind.TAINTED:
                 return self.tainted_finding(
                     node, ctx, info, sink,

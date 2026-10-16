@@ -66,6 +66,28 @@ class ScanStore:
             logger.exception("Stored scan %s is unreadable", scan_id)
             return None
 
+    def list_recent(self, limit: int | None = None) -> list[tuple[str, ScanResult]]:
+        """Return saved scans newest first for the Web UI's scan history."""
+        if not self.directory.is_dir():
+            return []
+        paths = [path for path in self.directory.glob("*.json") if is_valid_scan_id(path.stem)]
+
+        def modified_at(path: Path) -> int:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return 0
+
+        paths.sort(key=modified_at, reverse=True)
+        if limit is not None:
+            paths = paths[:max(0, limit)]
+        recent: list[tuple[str, ScanResult]] = []
+        for path in paths:
+            result = self.load(path.stem)
+            if result is not None:
+                recent.append((path.stem, result))
+        return recent
+
     def _prune(self, keep: Path) -> None:
         """Xóa các bản scan cũ nhất vượt quá ``max_scans``; không bao giờ xóa bản vừa lưu.
 
