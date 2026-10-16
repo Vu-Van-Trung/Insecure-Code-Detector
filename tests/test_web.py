@@ -92,7 +92,7 @@ def test_scan_without_input_is_rejected(client):
 def test_only_supported_files_are_accepted(client, name):
     response = upload(client, files=[(name, b"print(1)\n")])
     assert response.status_code == 400
-    assert "only .py, .java, .cs files are accepted" in response.text
+    assert "only .py, .java, .cs, .php files are accepted" in response.text
 
 
 @pytest.mark.parametrize(
@@ -283,3 +283,65 @@ def test_java_syntax_error_is_shown(client):
 def test_sanitize_keeps_supported_extensions():
     assert sanitize_filename("../src/Main.java") == "Main.java"
     assert sanitize_filename("Program.CS") == "Program.cs"
+
+
+# =========================================================== folder upload
+
+
+def upload_folder(client: TestClient, files, fetch: bool = False):
+    parts = [("folder", (path, content, "application/octet-stream")) for path, content in files]
+    headers = {"X-Requested-With": "fetch"} if fetch else {}
+    return client.post("/scan", files=parts, headers=headers, follow_redirects=False)
+
+
+def test_folder_upload_keeps_relative_paths_and_skips_other_files(client):
+    files = [
+        ("DVWA/vulnerabilities/exec/source/low.php", b"<?php\nshell_exec('ping ' . $_REQUEST['ip']);\n"),
+        ("DVWA/vulnerabilities/sqli/source/low.php", b"<?php\nmysqli_query($c, \"SELECT * FROM u WHERE id = '$_GET[id]'\");\n"),
+        ("DVWA/dvwa/css/main.css", b"body {}"),
+        ("DVWA/.git/hooks/pre-commit.py", b"import os\nos.system(input())\n"),
+        ("DVWA/node_modules/x/index.py", b"eval(input())\n"),
+    ]
+    response = upload_folder(client, files)
+    assert response.status_code == 303
+    page = client.get(response.headers["location"])
+    assert "DVWA/ (2 files)" in page.text
+    assert "DVWA/vulnerabilities/exec/source/low.php" in page.text
+    assert "DVWA/vulnerabilities/sqli/source/low.php" in page.text
+    for rule in ("PH001", "PH002"):
+        assert rule in page.text
+    assert "pre-commit" not in page.text and "node_modules" not in page.text
+
+
+def test_folder_upload_without_source_files_returns_json_error_for_fetch(client):
+    response = upload_folder(client, [("site/index.html", b"<html></html>")], fetch=True)
+    assert response.status_code == 400
+    assert "contains no source files" in response.json()["detail"]
+
+
+def test_folder_upload_skips_files_that_are_too_large(client):
+    big = b"x = 1\n" * (web.MAX_FILE_BYTES // 6 + 10)
+    response = upload_folder(client, [("p/big.py", big), ("p/small.py", b"eval(input())\n")])
+    page = client.get(response.headers["location"])
+    assert "1 files skipped" in page.text and "p/big.py" in page.text
+    assert "PY001" in page.text
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("DVWA/vulnerabilities/exec/low.php", "DVWA/vulnerabilities/exec/low.php"),
+        ("../../etc/passwd.py", "etc/passwd.py"),
+        (r"C:\Users\me\proj\a.py", "Users/me/proj/a.py"),
+        ("/abs/./x/../b.java", "abs/x/b.java"),
+        ("my dir/<script>.cs", "my_dir/_script_.cs"),
+        (".hidden/.env.py", "hidden/env.py"),
+    ],
+)
+def test_sanitize_relative_path(raw, expected):
+    assert web.sanitize_relative_path(raw) == expected
+
+
+def test_unique_name_keeps_extension():
+    used: set[str] = set()
+    assert [web.unique_name("a/x.php", used) for _ in range(3)] == ["a/x.php", "a/x_2.php", "a/x_3.php"]

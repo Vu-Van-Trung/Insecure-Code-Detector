@@ -4,7 +4,7 @@
   <div class="col-lg-9">
     <h1 class="h3 mb-1">Secure Code Analyzer</h1>
     <p class="text-secondary">
-      Detect insecure coding patterns in <strong>Python, Java and C#</strong> source code using syntax-tree
+      Detect insecure coding patterns in <strong>Python, Java, C# and PHP</strong> source code using syntax-tree
       analysis, a rule engine ({{ rule_count }} rules) and basic taint tracking.
     </p>
 
@@ -13,12 +13,18 @@
     {% endif %}
 
     <form id="scan-form" class="card shadow-sm" action="/scan" method="post" enctype="multipart/form-data"
-          data-max-file-kb="{{ limits.max_file_kb }}" data-extensions="{{ limits.extensions|replace(' ', '') }}" data-max-files="{{ limits.max_files }}">
+          data-max-file-kb="{{ limits.max_file_kb }}" data-extensions="{{ limits.extensions|replace(' ', '') }}" data-max-files="{{ limits.max_files }}"
+          data-max-folder-files="{{ limits.max_folder_files }}" data-max-request-mb="{{ limits.max_request_mb }}"
+          data-excluded-dirs="{{ limits.excluded_dirs }}">
       <div class="card-header">
         <ul class="nav nav-tabs card-header-tabs" role="tablist">
           <li class="nav-item">
             <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-upload" type="button" role="tab">
               <i class="bi bi-upload"></i> Upload Source File</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-folder" type="button" role="tab">
+              <i class="bi bi-folder2-open"></i> Upload Folder</button>
           </li>
           <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-paste" type="button" role="tab">
@@ -28,12 +34,22 @@
       </div>
       <div class="card-body tab-content">
         <div class="tab-pane fade show active" id="tab-upload" role="tabpanel">
-          <label for="files" class="form-label">Source files (Python, Java, C#)</label>
+          <label for="files" class="form-label">Source files (Python, Java, C#, PHP)</label>
           <input class="form-control" type="file" id="files" name="files" accept="{{ limits.extensions|replace(' ', '') }}" multiple>
           <div class="form-text">
             Up to {{ limits.max_files }} files, {{ limits.max_file_kb }} KB each. Accepted: <code>{{ limits.extensions }}</code>.
           </div>
           <ul id="file-list" class="list-unstyled small mt-2 mb-0"></ul>
+        </div>
+        <div class="tab-pane fade" id="tab-folder" role="tabpanel">
+          <label for="folder" class="form-label">Project folder</label>
+          <input class="form-control" type="file" id="folder" webkitdirectory directory multiple>
+          <div class="form-text">
+            Every {{ limits.extensions }} file in the folder and its sub-folders is scanned (up to
+            {{ limits.max_folder_files }} files, {{ limits.max_request_mb }} MB in total). Other files and folders such as
+            <code>.git</code> or <code>node_modules</code> are ignored. Each file is still analyzed on its own.
+          </div>
+          <div id="folder-summary" class="small mt-2"></div>
         </div>
         <div class="tab-pane fade" id="tab-paste" role="tabpanel">
           <div class="row g-2 mb-2">
@@ -43,6 +59,7 @@
                 <option value="python" selected>Python</option>
                 <option value="java">Java</option>
                 <option value="csharp">C#</option>
+                <option value="php">PHP</option>
               </select>
             </div>
             <div class="col-sm-8">

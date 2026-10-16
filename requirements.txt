@@ -1,9 +1,10 @@
 # Python analysis needs only the standard library (3.12+).
 
-# Java and C# analysis (syntax trees)
+# Java, C# and PHP analysis (syntax trees)
 tree-sitter>=0.23
 tree-sitter-java>=0.23
 tree-sitter-c-sharp>=0.23
+tree-sitter-php>=0.23
 
 # Web UI
 fastapi>=0.110

@@ -14,6 +14,18 @@
   </div>
 </div>
 
+{% if result.errors|length > 3 %}
+{# Folder scans can fail on many files: keep the page readable with a collapsible list. #}
+<details class="alert alert-danger">
+  <summary><strong>Scan failed for {{ result.errors|length }} files</strong></summary>
+  <ul class="mb-0 mt-2 small">
+    {% for error in result.errors %}
+    <li><code>{{ error.file }}</code> <span class="badge text-bg-danger">{{ error.error_type }}</span>
+      {{ error.reason }}{% if error.line %} (line {{ error.line }}){% endif %}</li>
+    {% endfor %}
+  </ul>
+</details>
+{% else %}
 {% for error in result.errors %}
 <div class="alert alert-danger">
   <strong>Scan failed: {{ error.file }}</strong> <span class="badge text-bg-danger">{{ error.error_type }}</span><br>
@@ -21,6 +33,15 @@
   {% if error.line %}<br>Line: {{ error.line }}{% endif %}
 </div>
 {% endfor %}
+{% endif %}
+{% if result.skipped_files %}
+<details class="alert alert-secondary">
+  <summary>{{ result.skipped_files|length }} files skipped</summary>
+  <ul class="mb-0 mt-2 small">
+    {% for path in result.skipped_files %}<li><code>{{ path }}</code></li>{% endfor %}
+  </ul>
+</details>
+{% endif %}
 
 <div class="row g-3 mb-3">
   <div class="col-lg-7">

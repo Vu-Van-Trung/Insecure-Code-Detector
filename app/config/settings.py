@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from app.analyzer.languages import CSHARP, JAVA
+from app.analyzer.languages import CSHARP, JAVA, PHP
 from app.analyzer.taint import TaintConfig
 from app.analyzer.ts.taint import TSTaintConfig
 from app.config.loader import CONFIG_DIR, ConfigError, get_string_list, load_json
@@ -230,7 +230,7 @@ class AnalyzerSettings:
 
         return cls(
             taint=taint_config or TaintConfig.load(),
-            language_taint={language: TSTaintConfig.load_default(language) for language in (JAVA, CSHARP)},
+            language_taint={language: TSTaintConfig.load_default(language) for language in (JAVA, CSHARP, PHP)},
             blacklist=Blacklist.load(blacklist_path) if blacklist_path else Blacklist(),
             whitelist=Whitelist.load(whitelist_path) if whitelist_path else Whitelist(),
             disabled_rules=_rule_ids(get_string_list(rules, "disabled_rules", where), where),

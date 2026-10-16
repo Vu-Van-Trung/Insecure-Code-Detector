@@ -13,8 +13,13 @@
     const maxFiles = Number(form.dataset.maxFiles);
     const maxBytes = Number(form.dataset.maxFileKb) * 1024;
     const extensions = form.dataset.extensions.split(",");
-    const languageExtension = { python: ".py", java: ".java", csharp: ".cs" };
+    const languageExtension = { python: ".py", java: ".java", csharp: ".cs", php: ".php" };
+    const maxFolderFiles = Number(form.dataset.maxFolderFiles);
+    const maxRequestBytes = Number(form.dataset.maxRequestMb) * 1024 * 1024;
+    const excludedDirs = new Set(form.dataset.excludedDirs.split(",").filter(Boolean));
     const fileInput = document.getElementById("files");
+    const folderInput = document.getElementById("folder");
+    const folderSummary = document.getElementById("folder-summary");
     const fileList = document.getElementById("file-list");
     const errorBox = document.getElementById("client-error");
 
@@ -55,8 +60,65 @@
       showError(validate());
     });
 
+    // ---------------------------------------------------------------- folder upload
+    // Only source files are sent; images, CSS, .git, node_modules... never leave the browser.
+    const isFolderTab = () => document.getElementById("tab-folder").classList.contains("active");
+    const folderSelection = () => {
+      const selected = [];
+      let tooLarge = 0;
+      for (const file of Array.from(folderInput.files)) {
+        const path = file.webkitRelativePath || file.name;
+        const directories = path.split("/").slice(0, -1);
+        if (!extensions.some((ext) => path.toLowerCase().endsWith(ext))) continue;
+        if (directories.some((dir) => excludedDirs.has(dir))) continue;
+        if (file.size > maxBytes) { tooLarge += 1; continue; }
+        selected.push(file);
+      }
+      return { selected, tooLarge };
+    };
+    const validateFolder = () => {
+      const { selected } = folderSelection();
+      if (!folderInput.files.length) return "Choose a folder to scan.";
+      if (!selected.length) return `The folder contains no source files (${extensions.join(", ")}).`;
+      if (selected.length > maxFolderFiles) return `${selected.length} source files: at most ${maxFolderFiles} per scan.`;
+      const total = selected.reduce((sum, file) => sum + file.size, 0);
+      if (total > maxRequestBytes * 0.95) return `The source files are larger than ${maxRequestBytes / 1048576} MB in total.`;
+      return "";
+    };
+
+    folderInput.addEventListener("change", () => {
+      const { selected, tooLarge } = folderSelection();
+      const counts = {};
+      selected.forEach((file) => {
+        const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+        counts[ext] = (counts[ext] || 0) + 1;
+      });
+      const parts = Object.entries(counts).map(([ext, count]) => `${count} ${ext}`);
+      folderSummary.textContent = `${selected.length} source files will be scanned` +
+        (parts.length ? ` (${parts.join(", ")})` : "") + (tooLarge ? `; ${tooLarge} skipped (too large)` : "") + ".";
+      showError(validateFolder());
+    });
+
+    const submitFolder = async () => {
+      const body = new FormData();
+      // The third argument keeps the relative path (e.g. "DVWA/vulnerabilities/exec/source/low.php").
+      folderSelection().selected.forEach((file) => body.append("folder", file, file.webkitRelativePath || file.name));
+      const response = await fetch(form.action, { method: "POST", body, headers: { "X-Requested-With": "fetch" } });
+      if (response.redirected && response.ok) {
+        window.location.href = response.url;
+        return;
+      }
+      let message = `Scan failed (HTTP ${response.status}).`;
+      try {
+        const data = await response.json();
+        if (typeof data.detail === "string") message = data.detail;
+      } catch (_) { /* not JSON: keep the generic message */ }
+      throw new Error(message);
+    };
+
     form.addEventListener("submit", (event) => {
-      const message = validate();
+      const folderMode = isFolderTab();
+      const message = folderMode ? validateFolder() : validate();
       if (message) {
         event.preventDefault();
         showError(message);
@@ -65,6 +127,13 @@
       const button = document.getElementById("scan-button");
       button.disabled = true;
       button.textContent = "Scanning...";
+      if (!folderMode) return;
+      event.preventDefault();
+      submitFolder().catch((error) => {
+        showError(error.message);
+        button.disabled = false;
+        button.textContent = "Start Scan";
+      });
     });
   }
 

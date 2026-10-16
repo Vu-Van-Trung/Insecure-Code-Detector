@@ -7,8 +7,9 @@ BẢO MẬT của chính ứng dụng web:
 
 * code được upload KHÔNG BAO GIỜ được thực thi, import hay ghi xuống đĩa: nó
   được đọc vào bộ nhớ và chỉ được parse bằng ``ast`` (không exec, không subprocess);
-* chỉ nhận file .py / .java / .cs, giới hạn kích thước và số lượng; tên file
-  được làm sạch và chỉ dùng làm nhãn hiển thị, nên không thể path traversal;
+* chỉ nhận file .py / .java / .cs / .php, giới hạn kích thước và số lượng; tên file
+  (và đường dẫn tương đối khi upload cả thư mục) được làm sạch và chỉ dùng làm
+  nhãn hiển thị, không bao giờ dùng để mở hay tạo file, nên không thể path traversal;
 * kích thước request được kiểm tra trước khi parse body, và dữ liệu multipart
   được giữ trong bộ nhớ (không tạo file tạm);
 * template tự động escape; có các security header chặt chẽ (CSP, chống nhúng iframe);
@@ -49,13 +50,15 @@ WEB_DIR = PROJECT_ROOT / "web"
 
 # ------------------------------------------------------------------ giới hạn upload
 MAX_FILE_BYTES = 1024 * 1024          # mỗi file upload / đoạn code paste
-MAX_FILES = 20                        # số file mỗi lần scan
-MAX_REQUEST_BYTES = 5 * 1024 * 1024   # toàn bộ request
-ALLOWED_EXTENSIONS = set(EXTENSIONS)  # .py, .java, .cs
+MAX_FILES = 20                        # số file mỗi lần scan (chọn từng file)
+MAX_FOLDER_FILES = 1000               # số file nguồn mỗi lần scan khi upload cả thư mục
+MAX_REQUEST_BYTES = 20 * 1024 * 1024  # toàn bộ request
+ALLOWED_EXTENSIONS = set(EXTENSIONS)  # .py, .java, .cs, .php
 ALLOWED_EXTENSIONS_TEXT = supported_extensions_text()
 # Pydantic/FastAPI tự từ chối mọi giá trị ngôn ngữ ngoài 3 giá trị này.
-LanguageName = Literal["python", "java", "csharp"]
+LanguageName = Literal["python", "java", "csharp", "php"]
 MAX_FILENAME_LENGTH = 100
+MAX_PATH_DEPTH = 20                   # số cấp thư mục tối đa của đường dẫn tương đối
 
 # Giữ dữ liệu multipart upload trong bộ nhớ thay vì ghi ra thư mục temp của hệ
 # thống: code được upload không bao giờ chạm tới đĩa.
@@ -101,6 +104,22 @@ def sanitize_filename(raw_name: str) -> str:
     return f"{stem}{extension}"
 
 
+def sanitize_relative_path(raw_path: str) -> str:
+    """Đường dẫn tương đối an toàn cho file trong thư mục upload, vd ``dvwa/vulnerabilities/exec/low.php``.
+
+    Bỏ các thành phần rỗng, ``.`` và ``..`` (nên không thể trỏ ra ngoài), bỏ ký tự ổ đĩa
+    (``C:``) và làm sạch từng thành phần như tên file. Giống ``sanitize_filename``, kết quả
+    chỉ là nhãn trong report; nó không bao giờ được dùng để mở hay tạo file.
+    """
+    parts = [part.strip() for part in raw_path.replace("\\", "/").split("/")]
+    parts = [part for part in parts if part not in {"", ".", ".."} and not part.endswith(":")]
+    if not parts:
+        raise UploadError("Empty file path in the uploaded folder.")
+    directories = [re.sub(r"[^A-Za-z0-9._-]", "_", part).lstrip(".")[:MAX_FILENAME_LENGTH] or "_"
+                   for part in parts[:-1]][-MAX_PATH_DEPTH:]
+    return "/".join([*directories, sanitize_filename(parts[-1])])
+
+
 def with_language(filename: str, language: str | None) -> str:
     """Ép extension khớp với ``language`` (code được paste: người dùng tự chọn ngôn ngữ).
 
@@ -127,9 +146,10 @@ async def read_upload(upload: UploadFile, limit: int = MAX_FILE_BYTES) -> bytes:
 
 def unique_name(name: str, used: set[str]) -> str:
     """Đổi tên khi có hai file trùng tên trong cùng một lần upload (a.py, a_2.py, ...)."""
+    path = PurePosixPath(name)
     candidate, counter = name, 2
     while candidate in used:
-        candidate = f"{name[:-3]}_{counter}.py"
+        candidate = str(path.with_name(f"{path.stem}_{counter}{path.suffix}"))
         counter += 1
     used.add(candidate)
     return candidate
@@ -142,7 +162,7 @@ def unique_name(name: str, used: set[str]) -> str:
 class ScanRequest(BaseModel):
     """Body của POST /api/scan."""
 
-    code: str = Field(..., min_length=1, max_length=MAX_FILE_BYTES, description="Python, Java or C# source code")
+    code: str = Field(..., min_length=1, max_length=MAX_FILE_BYTES, description="Python, Java, C# or PHP source code")
     filename: str = Field("snippet.py", max_length=MAX_FILENAME_LENGTH)
     language: LanguageName | None = Field(None, description="Overrides the language implied by the file name")
 
@@ -207,7 +227,9 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
     app = FastAPI(title="Secure Code Analyzer", version=__version__, docs_url="/api/docs", redoc_url=None)
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     # Các giới hạn hiển thị trên trang upload.
-    limits = {"extensions": ALLOWED_EXTENSIONS_TEXT, "max_file_kb": MAX_FILE_BYTES // 1024, "max_files": MAX_FILES, "max_request_mb": MAX_REQUEST_BYTES // 2**20}
+    limits = {"extensions": ALLOWED_EXTENSIONS_TEXT, "max_file_kb": MAX_FILE_BYTES // 1024, "max_files": MAX_FILES,
+              "max_folder_files": MAX_FOLDER_FILES, "max_request_mb": MAX_REQUEST_BYTES // 2**20,
+              "excluded_dirs": ",".join(sorted(settings.excluded_dirs))}
 
     # -------------------------------------------------------------- middleware / xử lý lỗi
 
@@ -274,18 +296,29 @@ def create_app(settings: AnalyzerSettings | None = None, store: ScanStore | None
     async def scan(
         request: Request,
         files: Annotated[list[UploadFile] | None, File()] = None,
+        folder: Annotated[list[UploadFile] | None, File()] = None,
         code: Annotated[str, Form(max_length=MAX_FILE_BYTES)] = "",
         filename: Annotated[str, Form(max_length=MAX_FILENAME_LENGTH)] = "pasted_code.py",
         language: Annotated[LanguageName, Form()] = "python",
     ) -> Response:
         """Nhận form, scan, lưu kết quả rồi chuyển hướng sang trang kết quả."""
         try:
-            sources = await collect_sources(files or [], code, with_language(filename or "pasted_code", language))
+            if folder:
+                sources, skipped = await collect_folder(folder, settings.excluded_dirs)
+                target = folder_label(sources)
+            else:
+                sources, skipped = await collect_sources(files or [], code,
+                                                         with_language(filename or "pasted_code", language)), []
+                target = ", ".join(name for name, _ in sources)
         except UploadError as exc:
+            if request.headers.get("x-requested-with") == "fetch":
+                # Upload thư mục được gửi bằng fetch(): trả lỗi dạng JSON để trang hiển thị.
+                return JSONResponse({"detail": str(exc)}, status_code=400)
             # Hiển thị lại form kèm thông báo lỗi và giữ nguyên code người dùng đã paste.
             context = {"limits": limits, "rule_count": len(engine.rules), "error": str(exc), "code": code}
             return templates.TemplateResponse(request, "index.html", context, status_code=400)
-        result = engine.scan_sources(sources, target=", ".join(name for name, _ in sources))
+        result = engine.scan_sources(sources, target=target)
+        result.skipped_files.extend(skipped)
         scan_id = store.save(result)
         # Mẫu Post/Redirect/Get: 303 chuyển sang GET, nên F5 trang kết quả không gửi lại form.
         return RedirectResponse(f"/scan/{scan_id}", status_code=303)
@@ -373,6 +406,43 @@ async def collect_sources(files: list[UploadFile], code: str, filename: str) -> 
     if not sources:
         raise UploadError(f"Upload at least one source file ({ALLOWED_EXTENSIONS_TEXT}) or paste some code.")
     return sources
+
+
+async def collect_folder(uploads: list[UploadFile], excluded_dirs: frozenset[str]) -> tuple[list[tuple[str, bytes]],
+                                                                                           list[str]]:
+    """File của một thư mục được upload (tên = đường dẫn tương đối); trả về (file nguồn, file bị bỏ qua).
+
+    File không phải mã nguồn và file nằm trong thư mục bị loại trừ (.git, node_modules...)
+    được bỏ qua thay vì báo lỗi, vì một thư mục thật luôn có ảnh, CSS, README...
+    """
+    sources: list[tuple[str, bytes]] = []
+    skipped: list[str] = []
+    used: set[str] = set()
+    for upload in uploads:
+        raw = (upload.filename or "").replace("\\", "/")
+        if not raw:
+            continue
+        directories = raw.split("/")[:-1]
+        if PurePosixPath(raw).suffix.lower() not in ALLOWED_EXTENSIONS or excluded_dirs.intersection(directories):
+            continue
+        if len(sources) >= MAX_FOLDER_FILES:
+            raise UploadError(f"Too many source files: at most {MAX_FOLDER_FILES} files per folder scan.")
+        name = unique_name(sanitize_relative_path(raw), used)
+        try:
+            sources.append((name, await read_upload(upload)))
+        except UploadError:
+            # Một file quá lớn không làm hỏng cả lần scan thư mục: ghi vào danh sách bỏ qua.
+            skipped.append(f"{name} (larger than {MAX_FILE_BYTES // 1024} KB)")
+    if not sources:
+        raise UploadError(f"The selected folder contains no source files ({ALLOWED_EXTENSIONS_TEXT}).")
+    return sources, skipped
+
+
+def folder_label(sources: list[tuple[str, bytes]]) -> str:
+    """Tên hiển thị của lần scan thư mục: thư mục gốc chung + số file, vd ``DVWA/ (169 files)``."""
+    roots = {name.split("/", 1)[0] for name, _ in sources if "/" in name}
+    root = f"{roots.pop()}/" if len(roots) == 1 else "folder upload"
+    return f"{root} ({len(sources)} files)"
 
 
 # Đối tượng app mà uvicorn chạy: "uvicorn app.main:app".

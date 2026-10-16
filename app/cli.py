@@ -37,13 +37,13 @@ def build_parser() -> argparse.ArgumentParser:
     """Khai báo các lệnh con (scan, rules, web) và tùy chọn của chúng."""
     parser = argparse.ArgumentParser(
         prog="main.py",
-        description="Secure Code Analyzer - static security analysis for Python, Java and C# source code.",
+        description="Secure Code Analyzer - static security analysis for Python, Java, C# and PHP source code.",
     )
     parser.add_argument("--version", action="version", version=f"Secure Code Analyzer v{__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     scan = subparsers.add_parser("scan", help="scan a Python file or directory")
-    scan.add_argument("target", help="source file (.py, .java, .cs) or directory to scan")
+    scan.add_argument("target", help="source file (.py, .java, .cs, .php) or directory to scan")
     scan.add_argument("--format", choices=OUTPUT_FORMATS, default="text", help="output format (default: text)")
     scan.add_argument("--output", "-o", help="write the report to this file instead of stdout")
     scan.add_argument("--whitelist", help="whitelist JSON file (default: ./whitelist.json if it exists)")

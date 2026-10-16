@@ -5,14 +5,14 @@ from __future__ import annotations
 from pathlib import PurePath
 
 # Mã định danh nội bộ của từng ngôn ngữ (dùng làm khóa trong cấu hình, rule.language...).
-PYTHON, JAVA, CSHARP = "python", "java", "csharp"
+PYTHON, JAVA, CSHARP, PHP = "python", "java", "csharp", "php"
 
 # Extension file -> ngôn ngữ. Engine dựa vào bảng này để chọn parser cho từng file.
-EXTENSIONS: dict[str, str] = {".py": PYTHON, ".java": JAVA, ".cs": CSHARP}
+EXTENSIONS: dict[str, str] = {".py": PYTHON, ".java": JAVA, ".cs": CSHARP, ".php": PHP}
 # Tên hiển thị cho người dùng (report, Web UI).
-DISPLAY_NAMES: dict[str, str] = {PYTHON: "Python", JAVA: "Java", CSHARP: "C#"}
+DISPLAY_NAMES: dict[str, str] = {PYTHON: "Python", JAVA: "Java", CSHARP: "C#", PHP: "PHP"}
 # Tiền tố mã rule của từng ngôn ngữ (PY001, JV001, CS001).
-RULE_PREFIXES: dict[str, str] = {PYTHON: "PY", JAVA: "JV", CSHARP: "CS"}
+RULE_PREFIXES: dict[str, str] = {PYTHON: "PY", JAVA: "JV", CSHARP: "CS", PHP: "PH"}
 
 
 def language_of(filename: str) -> str | None:
@@ -29,5 +29,5 @@ def extension_of(language: str) -> str:
 
 
 def supported_extensions_text() -> str:
-    """Danh sách extension để hiển thị trong thông báo lỗi, vd ``".py, .java, .cs"``."""
+    """Danh sách extension để hiển thị trong thông báo lỗi, vd ``".py, .java, .cs, .php"``."""
     return ", ".join(EXTENSIONS)

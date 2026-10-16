@@ -155,7 +155,7 @@ def unsafe_query_build(ctx: TSContext, node: Node) -> bool:
     node = adapter.unwrap(node)
     if adapter.is_static(node):
         return False
-    if node.type == adapter.binary_type and adapter.operator(node) == "+":
+    if node.type == adapter.binary_type and adapter.operator(node) in adapter.concat_operators:
         return bool(string_parts(ctx, node))
     if node.type in adapter.interpolated_types:
         return bool(adapter.interpolation_values(node))
@@ -219,7 +219,7 @@ class SqlRuleBase(TSRule):
         query = ctx.adapter.unwrap(query)
         if unsafe_query_build(ctx, query):
             return sink_node.start_point[0] + 1, string_parts(ctx, query)
-        if query.type != "identifier":
+        if query.type not in ctx.adapter.identifier_types:
             return None, []
         history = ctx.assignments_before(ctx.adapter.text(query), sink_node)
         # Bắt đầu từ phép gán thường cuối cùng (các giá trị trước đó đã bị ghi đè).

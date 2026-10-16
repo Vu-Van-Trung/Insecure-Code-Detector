@@ -30,7 +30,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from tree_sitter import Node
 
 # Toán tử cho ra kết quả boolean/kiểu (không phải văn bản do kẻ tấn công kiểm soát).
-_COMPARISON_OPERATORS = frozenset({"==", "!=", "<", ">", "<=", ">=", "&&", "||", "instanceof", "is", "as", "??"})
+_COMPARISON_OPERATORS = frozenset({"==", "!=", "<", ">", "<=", ">=", "&&", "||", "instanceof", "is", "as", "??",
+                                   "===", "!==", "<>", "<=>", "and", "or", "xor"})
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class TSTaintConfig:
 
     source_calls: frozenset[str] = frozenset()        # vd "request.getParameter"
     source_members: frozenset[str] = frozenset()      # vd "Request.Query"
+    source_variables: frozenset[str] = frozenset()    # vd "$_GET" (biến toàn cục của PHP)
     source_annotations: frozenset[str] = frozenset()  # vd "RequestParam", "FromQuery"
     main_args: bool = True                            # coi args của main() là source
     sanitizers: frozenset[str] = frozenset()
@@ -54,6 +56,7 @@ class TSTaintConfig:
         return cls(
             source_calls=frozenset(get_string_list(sources, "calls", where)),
             source_members=frozenset(get_string_list(sources, "members", where)),
+            source_variables=frozenset(get_string_list(sources, "variables", where)),
             source_annotations=frozenset(get_string_list(sources, "parameter_annotations", where)),
             main_args=main_args,
             sanitizers=frozenset(get_string_list(data, "sanitizers", where)),
@@ -116,6 +119,14 @@ class TSTaintAnalyzer:
                 self.state = {}
                 label = self.eval(declaration.value)
                 seed[declaration.name] = label if label is STATIC else None
+        # Biến toàn cục chứa dữ liệu request ($_GET, $_POST...): nhìn thấy ở mọi nơi.
+        for name in self.config.source_variables:
+            seed[name] = TaintInfo(source=name, path=(name,))
+        if self.adapter.top_level_code:
+            # Script PHP: code nằm ngay cấp file (ngoài mọi hàm) cũng được chạy.
+            self.state = dict(seed)
+            for child in self.ctx.root.named_children:
+                self._run(child, in_branch=False)
         for method in self.ctx.methods:
             self.state = dict(seed)
             for param in method.params:
@@ -157,7 +168,7 @@ class TSTaintAnalyzer:
                 label = self.eval(declaration.value) if declaration.value is not None else None
                 self._bind(declaration.name, label, in_branch)
             return
-        if node.type == adapter.assignment_type:
+        if node.type in adapter.assignment_types:
             self._assign(node, in_branch)
             return
         loop = adapter.loop_binding(node)
@@ -172,7 +183,7 @@ class TSTaintAnalyzer:
             return
         if node.type == "expression_statement":
             for child in node.named_children:
-                if child.type == adapter.assignment_type:
+                if child.type in adapter.assignment_types:
                     self._assign(child, in_branch)
                 else:
                     self.eval(child)
@@ -215,7 +226,7 @@ class TSTaintAnalyzer:
             base, _ = self.adapter.element_parts(target)
             return self._key(base) if base is not None else None
         text = normalize(self.adapter.text(target))
-        return text.removeprefix("this.") if text else None
+        return text.removeprefix(self.adapter.this_prefix) if text else None
 
     def _bind(self, name: str, label: Label, in_branch: bool) -> None:
         """Gán nhãn cho biến; trong nhánh thì gộp với giá trị cũ thay vì ghi đè."""
@@ -238,10 +249,15 @@ class TSTaintAnalyzer:
         if kind in adapter.interpolated_types:
             # $"SELECT ... {id}" (C#): phần chữ là STATIC, phần {..} theo nhãn của biểu thức.
             return combine([STATIC, *(self.eval(value) for value in adapter.interpolation_values(node))])
-        if kind == "identifier":
+        if kind in adapter.identifier_types:
             return self.state.get(adapter.text(node))
         if kind in {"this", "this_expression", "base_expression", "super"}:
             return None
+        cast = adapter.sanitizing_cast(node)
+        if cast:
+            # (int) $x: kết quả là một con số, giống lời gọi sanitizer intval($x).
+            data = taint_only(combine([self.eval(child) for child in node.named_children]))
+            return replace(data.through(cast), sanitizer=cast) if isinstance(data, TaintInfo) else None
         if kind in adapter.member_types:
             return self._eval_member(node)
         if kind in adapter.element_types:
@@ -263,13 +279,13 @@ class TSTaintAnalyzer:
                 return None
             # Chỉ phép "+" (nối chuỗi) mới có thể cho ra hằng số từ hai hằng số mà ta quan tâm;
             # phép toán khác (-, *, ...) chỉ giữ taint.
-            return combine(labels) if operator == "+" else taint_only(combine(labels))
+            return combine(labels) if operator in adapter.concat_operators else taint_only(combine(labels))
         if kind in adapter.ternary_types:
             # cond ? a : b - có thể là a hoặc b.
             condition = node.child_by_field_name("condition")
             if condition is not None:
                 self.eval(condition)
-            branches = [node.child_by_field_name(name) for name in ("consequence", "alternative")]
+            branches = [node.child_by_field_name(name) for name in adapter.ternary_fields]
             return combine([self.eval(branch) for branch in branches if branch is not None])
         if kind in adapter.wrapper_types:
             # Ngoặc, ép kiểu...: nhãn của biểu thức bên trong.
@@ -277,7 +293,7 @@ class TSTaintAnalyzer:
             return self.eval(inner) if inner.id != node.id else None
         if kind in adapter.lambda_types:
             return None
-        if kind == adapter.assignment_type:
+        if kind in adapter.assignment_types:
             # Phép gán dùng như biểu thức, vd while ((line = reader.readLine()) != null).
             self._assign(node, in_branch=True)
             return None
@@ -291,7 +307,7 @@ class TSTaintAnalyzer:
         source = self._member_source(text)
         if source:
             return TaintInfo(source=source, path=(source,))
-        key = text.removeprefix("this.")
+        key = text.removeprefix(self.adapter.this_prefix)
         if key in self.state:
             return self.state[key]
         obj = self.adapter.member_object(node)

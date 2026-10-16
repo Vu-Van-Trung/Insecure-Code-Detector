@@ -105,12 +105,16 @@ class TSContext:
                         self.var_values.setdefault(decl_scope, {})[declaration.name] = declaration.value
             # Phép gán thường; bỏ qua "Prop = value" bên trong object initializer của C#
             # (new T { Prop = value }) vì đã được CallSite.initializer ghi lại.
-            if node.type == adapter.assignment_type and node.parent is not None \
+            if node.type in adapter.assignment_types and node.parent is not None \
                     and node.parent.type != "initializer_expression":
                 left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
                 if left is not None and right is not None:
-                    self.assignments.append(Assignment(node, normalize(adapter.text(left)), right,
-                                                       adapter.operator(node) != "=", scope))
+                    target = normalize(adapter.text(left))
+                    self.assignments.append(Assignment(node, target, right, adapter.operator(node) != "=", scope))
+                    # x = new T() (PHP không có câu khai báo biến): ghi lại kiểu để suy kiểu receiver.
+                    value_type = self._creation_type(right)
+                    if value_type:
+                        self.var_types.setdefault(scope, {})[target] = value_type
             if adapter.is_string(node):
                 self.strings.append(node)
             if node.type in adapter.lambda_types:
@@ -142,7 +146,7 @@ class TSContext:
         """
         node = self.adapter.unwrap(node)
         text = self.adapter.text(node)
-        if node.type == "identifier":
+        if node.type in self.adapter.identifier_types:
             # Tìm trong method hiện tại trước, sau đó tới field của class.
             scope = self.scope_of_node.get(node.id, MODULE_SCOPE)
             for types in (self.var_types.get(scope, {}), self.var_types.get(MODULE_SCOPE, {})):
@@ -156,7 +160,8 @@ class TSContext:
                 return call.method
             # Factory static trên class: Runtime.getRuntime(), MD5.Create(), MessageDigest.getInstance()
             receiver = call.receiver
-            if receiver is not None and receiver.type == "identifier" and self.adapter.text(receiver)[:1].isupper():
+            if receiver is not None and receiver.type in self.adapter.identifier_types \
+                    and self.adapter.text(receiver)[:1].isupper():
                 return self.adapter.text(receiver)
             return None
         if node.type in self.adapter.member_types:
@@ -212,7 +217,7 @@ class TSContext:
         while current is not None and not self.adapter.is_statement(current):
             if current.type == "variable_declarator":
                 return self.adapter.text(current.child_by_field_name("name"))
-            if current.type == self.adapter.assignment_type:
+            if current.type in self.adapter.assignment_types:
                 return self.adapter.text(current.child_by_field_name("left")).rsplit(".", 1)[-1]
             current = current.parent
         return None

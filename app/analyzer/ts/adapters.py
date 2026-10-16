@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-from app.analyzer.languages import CSHARP, JAVA
+from app.analyzer.languages import CSHARP, JAVA, PHP
 
 if TYPE_CHECKING:  # pragma: no cover
     from tree_sitter import Node, Tree
@@ -57,6 +57,7 @@ class CallSite:
     receiver_type: str | None = None  # kiểu của receiver, được TSContext suy ra sau
     is_constructor: bool = False
     initializer: dict[str, Node] = field(default_factory=dict)  # C#: new T { Prop = value }
+    separator: str = "."              # dấu nối receiver và method khi hiển thị (PHP: "->")
 
     @property
     def names(self) -> frozenset[str]:
@@ -80,7 +81,7 @@ class CallSite:
         if self.is_constructor:
             return f"new {self.method}()"
         owner = self.receiver_type or self.receiver_text
-        return f"{owner}.{self.method}()" if owner else f"{self.method}()"
+        return f"{owner}{self.separator}{self.method}()" if owner else f"{self.method}()"
 
 
 @dataclass
@@ -136,10 +137,16 @@ class TreeSitterAdapter:
     method_types: frozenset[str]
     class_types: frozenset[str]
     branch_types: frozenset[str]        # câu lệnh rẽ nhánh / lặp / try
-    assignment_type = "assignment_expression"
+    assignment_types: frozenset[str] = frozenset({"assignment_expression"})  # =, += (PHP tách .= ra loại riêng)
     binary_type = "binary_expression"
+    concat_operators: frozenset[str] = frozenset({"+"})  # toán tử nối chuỗi (PHP: ".")
     ternary_types: frozenset[str]
+    ternary_fields: tuple[str, str] = ("consequence", "alternative")  # tên field của hai nhánh
     wrapper_types: frozenset[str]  # ngoặc / ép kiểu / argument: nhãn taint đi xuyên qua
+    identifier_types: frozenset[str] = frozenset({"identifier"})  # tên biến (PHP: variable_name)
+    this_prefix = "this."  # tiền tố truy cập field của chính đối tượng (PHP: "$this->")
+    # True nếu code cấp file cũng được chạy (script PHP), không chỉ code trong method.
+    top_level_code = False
 
     def __init__(self) -> None:
         # Import tree-sitter ở đây (lazy) để thiếu thư viện chỉ ảnh hưởng tới Java/C#.
@@ -161,6 +168,10 @@ class TreeSitterAdapter:
     def text(node: Node | None) -> str:
         """Văn bản mã nguồn của node (errors="replace" để byte lỗi không làm hỏng phân tích)."""
         return node.text.decode("utf-8", errors="replace") if node is not None else ""
+
+    def sanitizing_cast(self, node: Node) -> str | None:
+        """Tên sanitizer nếu node là phép ép sang kiểu số, vd ``(int) $x`` của PHP; ngược lại None."""
+        return None
 
     @staticmethod
     def operator(node: Node) -> str:
@@ -560,6 +571,195 @@ class CSharpAdapter(TreeSitterAdapter):
         return None
 
 
+# --------------------------------------------------------------------------- PHP
+
+
+class PhpAdapter(TreeSitterAdapter):
+    """Mô tả grammar tree-sitter-php (bản có HTML xen kẽ, như file .php thật).
+
+    Khác Java/C#: biến là ``variable_name`` ($x), nối chuỗi bằng ``.``, chuỗi nháy
+    kép "..." / heredoc là chuỗi nội suy, và script chạy ngay ở cấp file.
+    """
+
+    language = PHP
+    comment_types = frozenset({"comment"})
+    string_types = frozenset({"string", "nowdoc"})
+    # "name" ở vị trí biểu thức là một hằng số (DVWA_WEB_PAGE_TO_ROOT, __DIR__, $row[first]).
+    literal_types = frozenset({"integer", "float", "boolean", "null", "name", "qualified_name"})
+    interpolated_types = frozenset({"encapsed_string", "heredoc", "shell_command_expression"})
+    call_type = "function_call_expression"
+    constructor_types = frozenset({"object_creation_expression"})
+    member_types = frozenset({"member_access_expression", "nullsafe_member_access_expression",
+                              "scoped_property_access_expression"})
+    element_types = frozenset({"subscript_expression"})
+    lambda_types = frozenset({"anonymous_function", "anonymous_function_creation_expression", "arrow_function"})
+    method_types = frozenset({"function_definition", "method_declaration"})
+    class_types = frozenset({"class_declaration", "interface_declaration", "trait_declaration", "enum_declaration",
+                             "declaration_list"})
+    branch_types = frozenset({
+        "if_statement", "else_if_clause", "else_clause", "for_statement", "foreach_statement", "while_statement",
+        "do_statement", "try_statement", "catch_clause", "finally_clause", "switch_statement", "switch_block",
+        "case_statement", "default_statement", "match_expression",
+    })
+    statement_types = frozenset({"compound_statement", "else_if_clause", "else_clause", "catch_clause",
+                                 "finally_clause", "switch_block", "colon_block"})
+    ternary_types = frozenset({"conditional_expression"})
+    ternary_fields = ("body", "alternative")
+    wrapper_types = frozenset({"parenthesized_expression", "argument"})
+    identifier_types = frozenset({"variable_name"})
+    assignment_types = frozenset({"assignment_expression", "augmented_assignment_expression",
+                                  "reference_assignment_expression"})
+    concat_operators = frozenset({"."})
+    this_prefix = "$this->"
+    top_level_code = True
+
+    # Phần chữ cố định bên trong chuỗi nội suy (không phải biểu thức).
+    _TEXT_PARTS = frozenset({"string_content", "escape_sequence", "heredoc_start", "heredoc_end", "text"})
+    # Câu lệnh/biểu thức đặc biệt của PHP được coi như lời gọi hàm (để rule và taint xử lý chung).
+    _INTRINSICS = {"include_expression": "include", "include_once_expression": "include_once",
+                   "require_expression": "require", "require_once_expression": "require_once",
+                   "echo_statement": "echo", "print_intrinsic": "print", "exit_statement": "exit",
+                   "shell_command_expression": "shell_exec"}
+    # (int) $x tương đương intval($x): báo theo tên hàm để message dễ đọc ("after intval()").
+    _NUMERIC_CASTS = {"int": "intval", "integer": "intval", "float": "floatval", "double": "floatval",
+                      "bool": "boolval", "boolean": "boolval"}
+
+    def _grammar(self) -> Any:
+        try:
+            import tree_sitter_php
+        except ImportError as exc:  # pragma: no cover
+            raise LanguageUnavailable("tree-sitter-php is not installed") from exc
+        return tree_sitter_php.language_php()
+
+    def is_string(self, node: Node) -> bool:
+        # Chuỗi nháy kép không chứa biến cũng là chuỗi hằng (cho rule secret).
+        return node.type in self.string_types or (node.type == "encapsed_string"
+                                                  and not self.interpolation_values(node))
+
+    def string_value(self, node: Node) -> str | None:
+        if node.type in {"encapsed_string", "heredoc"}:
+            if self.interpolation_values(node):
+                return None
+            return "".join(self.text(c) for c in self._content(node) if c.type in self._TEXT_PARTS
+                           and c.type not in {"heredoc_start", "heredoc_end"})
+        if node.type == "nowdoc":
+            body = next((c for c in node.named_children if c.type == "nowdoc_body"), None)
+            return self.text(body) if body is not None else ""
+        return super().string_value(node)
+
+    def _content(self, node: Node) -> list[Node]:
+        """Các phần của chuỗi nội suy; với heredoc là các node con của heredoc_body."""
+        if node.type == "heredoc":
+            body = next((c for c in node.named_children if c.type == "heredoc_body"), None)
+            return list(body.named_children) if body is not None else []
+        return list(node.named_children)
+
+    def interpolation_values(self, node: Node) -> list[Node]:
+        """Biến/biểu thức nằm trong "...$x...{$a['k']}..." / heredoc / `lệnh $x`."""
+        return [c for c in self._content(node) if c.type not in self._TEXT_PARTS and c.type not in self.comment_types]
+
+    def sanitizing_cast(self, node: Node) -> str | None:
+        if node.type != "cast_expression":
+            return None
+        cast_type = self.text(node.child_by_field_name("type")).strip().lower()
+        return self._NUMERIC_CASTS.get(cast_type)
+
+    def call_site(self, node: Node) -> CallSite | None:
+        kind = node.type
+        if kind == "function_call_expression":
+            # foo($a) / \foo($a); $f($a) (gọi hàm động) giữ nguyên văn bản biến.
+            function = node.child_by_field_name("function")
+            return CallSite(node=node, method=self.text(function).lstrip("\\"),
+                            args=self._args(node.child_by_field_name("arguments")))
+        if kind in {"member_call_expression", "nullsafe_member_call_expression", "scoped_call_expression"}:
+            # $obj->method(), $obj?->method(), Class::method()
+            receiver = node.child_by_field_name("object") or node.child_by_field_name("scope")
+            return CallSite(
+                node=node, method=self.text(node.child_by_field_name("name")),
+                args=self._args(node.child_by_field_name("arguments")), receiver=receiver,
+                receiver_text=normalize(self.text(receiver)).lstrip("\\") if receiver is not None else None,
+                separator="::" if kind == "scoped_call_expression" else "->",
+            )
+        if kind == "object_creation_expression":
+            # new PDO(...): node con là tên lớp và arguments (grammar không đặt tên field).
+            type_node = next((c for c in node.named_children if c.type in {"name", "qualified_name"}), None)
+            arguments = next((c for c in node.named_children if c.type == "arguments"), None)
+            return CallSite(node=node, method=simple_type(self.text(type_node).lstrip("\\").replace("\\", ".")) or "",
+                            args=self._args(arguments), is_constructor=True)
+        if kind in self._INTRINSICS:
+            # include $f; echo $a, $b; print $x; exit($m); `ls $d`
+            args = [node] if kind == "shell_command_expression" else [
+                self.unwrap(c) for c in node.named_children if c.type not in self.comment_types]
+            return CallSite(node=node, method=self._INTRINSICS[kind], args=args)
+        return None
+
+    def declarations(self, node: Node) -> list[Declaration] | None:
+        # Thuộc tính và hằng của class: private $password = '...'; const API_KEY = '...';
+        if node.type == "property_element":
+            name = self.text(node.child_by_field_name("name")).lstrip("$")
+            return [Declaration(node=node, name=name, type=None,
+                                value=node.child_by_field_name("default_value"), is_field=True)]
+        if node.type == "const_element":
+            children = [c for c in node.named_children if c.type not in self.comment_types]
+            if len(children) == 2:
+                return [Declaration(node=node, name=self.text(children[0]), type=None, value=children[1],
+                                    is_field=True)]
+        return None
+
+    def method_info(self, node: Node) -> MethodInfo | None:
+        if node.type not in self.method_types:
+            return None
+        params = []
+        parameters = node.child_by_field_name("parameters")
+        for param in (parameters.named_children if parameters is not None else []):
+            if param.type in {"simple_parameter", "variadic_parameter", "property_promotion_parameter"}:
+                params.append(Parameter(self.text(param.child_by_field_name("name")),
+                                        simple_type(self.text(param.child_by_field_name("type"))), frozenset()))
+        return MethodInfo(node, self.text(node.child_by_field_name("name")), params,
+                          node.child_by_field_name("body"))
+
+    def loop_binding(self, node: Node) -> tuple[str, Node] | None:
+        # foreach ($rows as $row) / foreach ($rows as $key => $row): grammar không đặt tên field.
+        if node.type != "foreach_statement":
+            return None
+        parts = [c for c in node.named_children if c.type not in self.comment_types]
+        if len(parts) < 2:
+            return None
+        value = parts[1]
+        if value.type == "pair":
+            value = value.named_children[-1]
+        if value.type == "by_ref":
+            value = value.named_children[-1] if value.named_children else value
+        return self.text(value), parts[0]
+
+    def member_object(self, node: Node) -> Node | None:
+        return node.child_by_field_name("object") or node.child_by_field_name("scope")
+
+    def element_parts(self, node: Node) -> tuple[Node | None, list[Node]]:
+        children = [c for c in node.named_children if c.type not in self.comment_types]
+        return (children[0] if children else None), children[1:]
+
+    def array_elements(self, node: Node) -> list[Node] | None:
+        """Các giá trị của array(...) / [...] (bỏ khóa của cặp 'k' => v)."""
+        if node.type != "array_creation_expression":
+            return None
+        values = []
+        for element in node.named_children:
+            if element.type == "array_element_initializer" and element.named_children:
+                values.append(self.unwrap(element.named_children[-1]))
+        return values
+
+    def lambda_returns_true(self, node: Node) -> bool:
+        body = node.child_by_field_name("body")
+        if body is None:
+            return False
+        if node.type == "arrow_function":  # fn($a) => true
+            return self.text(body).strip().lower() == "true"
+        statements = [c for c in body.named_children if c.type not in self.comment_types]
+        return (len(statements) == 1 and statements[0].type == "return_statement"
+                and self.text(statements[0]).replace(" ", "").lower() == "returntrue;")
+
+
 @lru_cache(maxsize=None)
 def get_adapter(language: str) -> TreeSitterAdapter:
     """Mỗi ngôn ngữ một adapter (và một parser), tạo ở lần dùng đầu tiên rồi dùng lại (cache)."""
@@ -567,4 +767,6 @@ def get_adapter(language: str) -> TreeSitterAdapter:
         return JavaAdapter()
     if language == CSHARP:
         return CSharpAdapter()
+    if language == PHP:
+        return PhpAdapter()
     raise ValueError(f"No tree-sitter adapter for {language}")

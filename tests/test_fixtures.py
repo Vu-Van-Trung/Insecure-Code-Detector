@@ -1,7 +1,7 @@
 """End-to-end check of the fixture files in tests/vulnerable and tests/safe.
 
 Each line expected to be reported carries a ``# expect: PY001`` marker
-(``// expect: JV001`` in Java/C#; comma-separated for several rules).
+(``// expect: JV001`` in Java/C#/PHP; comma-separated for several rules).
 The analyzer must report exactly those
 (rule, line) pairs: nothing missing (false negatives) and nothing extra
 (false positives).
@@ -16,7 +16,7 @@ from app.models.finding import Severity
 
 FIXTURES = Path(__file__).parent
 EXPECT_MARKER = re.compile(r"(?:#|//)\s*expect:\s*([A-Z0-9, ]+)")
-EXTENSIONS = (".py", ".java", ".cs")
+EXTENSIONS = (".py", ".java", ".cs", ".php")
 
 
 def expected_findings(path: Path) -> set[tuple[str, int]]:

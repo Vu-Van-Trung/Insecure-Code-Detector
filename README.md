@@ -1,9 +1,9 @@
 # Secure Code Analyzer
 
-Công cụ **SAST (Static Application Security Testing)** cho mã nguồn **Python, Java và C#**, xây dựng trong đồ án
+Công cụ **SAST (Static Application Security Testing)** cho mã nguồn **Python, Java, C# và PHP**, xây dựng trong đồ án
 *"Xây dựng công cụ phân tích mã nguồn và phát hiện một số mẫu mã không an toàn"*.
 
-Công cụ phân tích mã nguồn bằng **cây cú pháp** (module `ast` cho Python, **tree-sitter** cho Java và C#),
+Công cụ phân tích mã nguồn bằng **cây cú pháp** (module `ast` cho Python, **tree-sitter** cho Java, C# và PHP),
 áp dụng một **Rule Engine** dạng plugin và **Taint Tracking** cơ bản để phát hiện các security anti-pattern.
 Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: không bao giờ bị import, biên dịch hay chạy.
 
@@ -12,6 +12,7 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 | Python | `.py` | `ast` (thư viện chuẩn) | PY001–PY018 |
 | Java | `.java` | tree-sitter-java | JV001–JV009 |
 | C# | `.cs` | tree-sitter-c-sharp | CS001–CS009 |
+| PHP | `.php` | tree-sitter-php | PH001–PH013 |
 
 ---
 
@@ -19,7 +20,7 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 
 | Thành phần | Mô tả |
 |---|---|
-| Core Analyzer | Parser, Rule Engine, Taint Tracking. Phần Python chỉ dùng thư viện chuẩn; Java/C# dùng tree-sitter. Độc lập với Web UI |
+| Core Analyzer | Parser, Rule Engine, Taint Tracking. Phần Python chỉ dùng thư viện chuẩn; Java/C#/PHP dùng tree-sitter. Độc lập với Web UI |
 | CLI | `python main.py scan <file_or_directory>` — dùng được trong CI/CD (exit code) |
 | Web UI | FastAPI + Bootstrap 5 + Chart.js tại `http://127.0.0.1:8000` |
 | Report | JSON, CSV, HTML |
@@ -28,7 +29,7 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 
 ## 2. Tính năng
 
-- **36 security rules**: 18 cho Python, 9 cho Java, 9 cho C#; mỗi rule có severity, confidence, CWE, recommendation.
+- **49 security rules**: 18 cho Python, 9 cho Java, 9 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
 - **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
   `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
 - **Taint tracking** intra-procedural cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
@@ -38,12 +39,12 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
   loại sink đó.
 - **Severity theo ngữ cảnh**: cùng `os.system()` nhưng `input()` → CRITICAL, hằng số → LOW.
 - **Whitelist** (file, rule, secret, comment `# analyzer-ignore`) và **Blacklist** (JSON).
-- **Web UI**: upload nhiều file `.py`/`.java`/`.cs` hoặc paste code (chọn ngôn ngữ), dashboard, biểu đồ,
+- **Web UI**: upload nhiều file `.py`/`.java`/`.cs`/`.php`, upload **cả thư mục** (tối đa 1000 file nguồn, 20 MB) hoặc paste code (chọn ngôn ngữ), dashboard, biểu đồ,
   chi tiết finding, export report.
 - **Bảo mật của chính ứng dụng**: không thực thi code upload, không ghi file upload xuống đĩa,
   chống path traversal, giới hạn kích thước/số lượng/extension, CSP, escape toàn bộ output.
 - **Logging** vào `logs/analyzer.log` (chỉ metadata, không log source code hay secret).
-- **687 unit test** (pytest).
+- **717 unit test** (pytest).
 
 ## 3. Kiến trúc
 
@@ -80,7 +81,7 @@ app/
   storage.py           Lưu kết quả scan của web dạng JSON (data/scans/)
   logging_config.py    Cấu hình logging
   analyzer/            parser, context, visitor, engine, taint, suppression, languages, utils
-  analyzer/ts/         adapters (Java, C#), context, taint cho tree-sitter
+  analyzer/ts/         adapters (Java, C#, PHP), context, taint cho tree-sitter
   rules/               base, registry, rule Python (15 file), java_rules.py, csharp_rules.py,
                        _ts_common.py (lớp cơ sở Java/C#), _keywords.py, _values.py (helper dùng chung)
   models/finding.py    Finding, ScanResult, Severity
@@ -142,8 +143,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Phân tích Python chỉ cần thư viện chuẩn. Phân tích Java/C# cần `tree-sitter`, `tree-sitter-java`,
-`tree-sitter-c-sharp` (có bản dựng sẵn, không cần cài JDK hay .NET). Nếu thiếu, file Java/C# được báo lỗi
+Phân tích Python chỉ cần thư viện chuẩn. Phân tích Java/C#/PHP cần `tree-sitter`, `tree-sitter-java`,
+`tree-sitter-c-sharp`, `tree-sitter-php` (có bản dựng sẵn, không cần cài JDK hay .NET). Nếu thiếu, file Java/C# được báo lỗi
 `LanguageUnavailable` còn file Python vẫn được scan bình thường.
 
 ## 5. Chạy Web
@@ -236,6 +237,28 @@ tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, h�
 | CWE-330 | **JV007** `java.util.Random`, `Math.random` cho token/otp... | **CS007** `System.Random` cho token/otp... | `SecureRandom`, `RandomNumberGenerator` → không báo |
 | CWE-798 | **JV008** secret theo tên + entropy, key đã biết, `password=` trong JDBC URL | **CS008** như Java + `Password=` trong connection string, property initializer | giá trị bị che |
 | CWE-295 | **JV009** TrustManager rỗng, `verify()` luôn `true`, `NoopHostnameVerifier` | **CS009** callback trả `true`, `DangerousAcceptAnyServerCertificateValidator` | |
+
+### PHP
+
+Dùng chung adapter, taint và lớp cơ sở với Java/C#. Source là các biến toàn cục `$_GET`, `$_POST`,
+`$_REQUEST`, `$_COOKIE`, `$_FILES`, `$_SERVER`; code ở cấp file (ngoài hàm, kiểu DVWA) cũng được phân tích.
+Taint đi qua `.`, `.=`, chuỗi `"...$x..."`/`{$a['k']}`, heredoc và backtick.
+
+| Rule | Phát hiện | Severity | CWE | Không báo / giảm mức |
+|---|---|---|---|---|
+| PH001 | `system`, `exec`, `shell_exec`, `passthru`, `popen`, `proc_open`, backtick | HIGH | CWE-78 | `escapeshellarg` → LOW; hằng số → LOW |
+| PH002 | `mysqli_query`, `mysql_query`, `pg_query`..., `$db->query()/exec()/prepare()` | HIGH | CWE-89 | query hằng số/tham số hóa → không báo; `intval`/`(int)`/escape → LOW |
+| PH003 | `eval`, `assert(string)`, `create_function`, `preg_replace` `/e` | CRITICAL | CWE-95 | |
+| PH004 | `include`/`require` đường dẫn động | HIGH | CWE-98 | `__DIR__ . '/x.php'`, `$map['key']` → không báo; biến không rõ nguồn → MEDIUM |
+| PH005 | `fopen`, `file_get_contents`, `readfile`, `unlink`, `move_uploaded_file`... với path tainted | HIGH | CWE-22 | `basename`/`realpath` → không báo |
+| PH006 | XSS: `echo`/`print`/`printf` dữ liệu tainted; chuỗi HTML ghép từ dữ liệu tainted (`$html .= '<pre>' . $_GET['x']`) | HIGH | CWE-79 | `htmlspecialchars`/`htmlentities` → không báo |
+| PH007 | `md5`, `sha1`, `hash('md5'...)` | MEDIUM | CWE-328 | hash mật khẩu → HIGH |
+| PH008 | `rand`, `mt_rand`, `uniqid`, `str_shuffle`... cho token/session/otp | MEDIUM | CWE-330 | `rand(1, 6)` cho game → không báo |
+| PH009 | Hardcoded secret: biến, `$cfg['db_password']`, `define()`, `'pass' => '...'`, property | HIGH | CWE-798 | placeholder → không báo |
+| PH010 | `unserialize()` | HIGH | CWE-502 | `['allowed_classes' => false]` → không báo |
+| PH011 | `CURLOPT_SSL_VERIFYPEER`/`VERIFYHOST` tắt, `'verify_peer' => false` | MEDIUM | CWE-295 | |
+| PH012 | `header('Location: ' . $_GET[...])` | MEDIUM | CWE-601 | header khác → CWE-113 |
+| PH013 | `move_uploaded_file` giữ tên file client gửi (`$_FILES[..]['name']`) | HIGH | CWE-434 | tên file do server sinh → không báo |
 
 ### Severity và Confidence
 
@@ -350,6 +373,9 @@ thành viên (`Request.Query`, `Request.Form`), **tham số có annotation/attri
 `@PathVariable`, `[FromQuery]`, `[FromBody]`...) và `args` của `main`. Sanitizer mặc định:
 `Integer.parseInt`, `int.Parse`, `Guid.Parse`...
 
+Với PHP, source là `$_GET`, `$_POST`, `$_REQUEST`, `$_COOKIE`, `$_FILES`, `$_SERVER` (`app/config/taint_php.json`).
+Sanitizer: `intval`, `(int)`, `htmlspecialchars`, `mysqli_real_escape_string`, `escapeshellarg`, `basename`...
+
 ```text
 [CRITICAL] CS001 AccountController.cs:27:8 - Untrusted input from [FromQuery] reaches Process.Start().
     Source: [FromQuery]  Sink: Process.Start()
@@ -372,14 +398,14 @@ CRITICAL (PY003). Khi ghép nhiều phần, kết quả chỉ an toàn nếu m�
 ## 11. Testing
 
 ```powershell
-python -m pytest -q                     # toàn bộ 687 test
+python -m pytest -q                     # toàn bộ 717 test
 python -m pytest tests/test_taint.py -v # một nhóm
 ```
 
 | Nhóm | File |
 |---|---|
 | Rule Python (vulnerable / safe / false positive) | `test_eval.py`, `test_exec.py`, `test_command.py`, `test_pickle.py`, `test_yaml.py`, `test_secret.py`, `test_crypto.py`, `test_requests.py`, `test_sql.py`, `test_path.py`, `test_ssrf.py`, `test_xml.py`, `test_tempfile.py`, `test_xss.py` |
-| Rule Java / C# (kèm taint) | `test_java.py`, `test_csharp.py` |
+| Rule Java / C# / PHP (kèm taint) | `test_java.py`, `test_csharp.py`, `test_php.py` |
 | Taint tracking | `test_taint.py` |
 | Whitelist / Blacklist / Severity | `test_whitelist.py`, `test_blacklist.py`, `test_severity.py` |
 | Core | `test_parser.py`, `test_utils.py`, `test_registry.py`, `test_engine.py`, `test_models.py` |
@@ -444,7 +470,10 @@ triển khai chúng. Mọi secret trong đó là giá trị giả.
 - Java/C#: không phân giải kiểu đầy đủ như trình biên dịch (không đọc `import`/`using` hay thư viện);
   kiểu của biến được suy từ khai báo và `new T()`, nên đối tượng truyền qua nhiều lớp có thể bị bỏ sót.
   Không phân tích lambda, generic phức tạp, LINQ, annotation cấu hình (Spring Security...).
-- Java/C# yêu cầu UTF-8; file có lỗi cú pháp không được phân tích (báo *Scan failed*).
+- Java/C#/PHP yêu cầu UTF-8; file có lỗi cú pháp không được phân tích (báo *Scan failed*).
+- PHP: không theo dõi dữ liệu qua `include` giữa các file (vd DVWA gán `$file = $_GET['page']` ở `low.php`
+  rồi `include($file)` ở `index.php`: chỉ báo MEDIUM), không theo dõi `$_SESSION` và dữ liệu đọc từ database
+  (stored XSS), không phân tích JavaScript trong trang.
 - Web UI không có xác thực người dùng; chỉ nên chạy trên `127.0.0.1`. Bootstrap/Chart.js tải từ CDN
   (cần Internet khi mở trang).
 - Static analysis có thể có false positive và false negative — mọi finding cần được review.

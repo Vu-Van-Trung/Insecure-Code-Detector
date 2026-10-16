@@ -1,0 +1,20 @@
+{
+    "sources": {
+        "variables": ["$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_FILES", "$_SERVER", "$HTTP_RAW_POST_DATA"],
+        "calls": [
+            "getenv", "apache_request_headers", "getallheaders",
+            "filter_input", "filter_input_array", "fgets", "readline", "stream_get_contents",
+            "$request.get", "$request.input", "$request.query", "$request.post", "$request.all"
+        ],
+        "members": [],
+        "parameter_annotations": [],
+        "main_args": false
+    },
+    "sanitizers": [
+        "intval", "floatval", "boolval", "abs",
+        "htmlspecialchars", "htmlentities", "strip_tags", "urlencode", "rawurlencode",
+        "mysqli_real_escape_string", "mysql_real_escape_string", "mysqli.real_escape_string", "pg_escape_string",
+        "pg_escape_literal", "addslashes", "escapeshellarg", "escapeshellcmd", "basename", "realpath",
+        "PDO.quote", "$pdo.quote", "$db.quote"
+    ]
+}
