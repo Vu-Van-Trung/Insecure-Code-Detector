@@ -1,4 +1,4 @@
-// Intentionally vulnerable test fixture: C# rules CS001 - CS009. Never compile or run this file.
+// Intentionally vulnerable test fixture: C# rules CS001 - CS012. Never compile or run this file.
 using System;
 using System.Data.SqlClient;
 using System.Diagnostics;
@@ -36,5 +36,18 @@ public class AccountController : Controller
     {
         var random = new Random();
         return random.Next().ToString("x"); // expect: CS007
+    }
+
+    public IActionResult Download([FromQuery] string file)
+    {
+        var text = System.IO.File.ReadAllText(System.IO.Path.Combine("/srv/files", file)); // expect: CS011
+        return PhysicalFile("/srv/reports/" + file, "application/pdf"); // expect: CS011
+    }
+
+    public IActionResult Search([FromQuery] string q)
+    {
+        Response.WriteAsync("<p>Results for " + q + "</p>"); // expect: CS012
+        var banner = new HtmlString(q); // expect: CS012
+        return Content("<h1>" + q + "</h1>", "text/html"); // expect: CS012
     }
 }

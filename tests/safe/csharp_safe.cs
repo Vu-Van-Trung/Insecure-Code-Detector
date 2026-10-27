@@ -36,4 +36,17 @@ public class AccountController : Controller
     {
         return new Random().Next(1, 7);
     }
+
+    public IActionResult Download([FromQuery] string file)
+    {
+        var text = System.IO.File.ReadAllText(System.IO.Path.Combine("/srv/files", System.IO.Path.GetFileName(file)));
+        using var body = new System.IO.StreamReader(Request.Body);
+        return PhysicalFile("/srv/reports/annual.pdf", "application/pdf");
+    }
+
+    public IActionResult Search([FromQuery] string q)
+    {
+        Response.WriteAsync("<p>Results for " + System.Net.WebUtility.HtmlEncode(q) + "</p>");
+        return Content(q);
+    }
 }

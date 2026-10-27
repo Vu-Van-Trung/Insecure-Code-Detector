@@ -46,4 +46,16 @@ public class AccountController : Controller
     {
         ServicePointManager.ServerCertificateValidationCallback = (s, c, ch, e) => true; // CS009
     }
+
+    [HttpGet("files")]
+    public IActionResult Download([FromQuery] string name)
+    {
+        return PhysicalFile(Path.Combine("/srv/files", name), "application/octet-stream"); // CS011 (tainted)
+    }
+
+    [HttpGet("hello")]
+    public IActionResult Hello([FromQuery] string name)
+    {
+        return Content("<h1>Hello " + name + "</h1>", "text/html");     // CS012 (tainted)
+    }
 }

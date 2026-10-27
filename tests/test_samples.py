@@ -16,8 +16,8 @@ EXPECTED_RULES = {
     "secret_vulnerable.py": {"PY007"},
     "pickle_vulnerable.py": {"PY005", "PY006"},
     "web_vulnerable.py": {"PY014", "PY015", "PY016", "PY017", "PY018"},
-    "UserController_vulnerable.java": {"JV001", "JV002", "JV003", "JV005", "JV007", "JV008"},
-    "AccountController_vulnerable.cs": {"CS001", "CS002", "CS003", "CS005", "CS008", "CS009"},
+    "UserController_vulnerable.java": {"JV001", "JV002", "JV003", "JV005", "JV007", "JV008", "JV011", "JV012"},
+    "AccountController_vulnerable.cs": {"CS001", "CS002", "CS003", "CS005", "CS008", "CS009", "CS011", "CS012"},
     "dvwa_style_vulnerable.php": {"PH001", "PH002", "PH003", "PH004", "PH005", "PH006", "PH007", "PH008",
                                   "PH009", "PH010", "PH011", "PH012", "PH013"},
 }
