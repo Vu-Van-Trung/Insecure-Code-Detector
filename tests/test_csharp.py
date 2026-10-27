@@ -1,4 +1,4 @@
-"""C# rules CS001 - CS009 and C# taint tracking (tree-sitter)."""
+"""C# rules CS001 - CS010 and C# taint tracking (tree-sitter)."""
 
 import textwrap
 
@@ -239,3 +239,61 @@ def test_inter_procedural_call_in_csharp(cs):
     assert len(findings) == 1
     assert findings[0].severity is Severity.CRITICAL
     assert findings[0].source == "Console.ReadLine()"
+
+
+# ---------------------------------------------------------------- CS010 open redirect
+
+
+def test_open_redirect_from_request_query(cs):
+    [finding] = cs('Response.Redirect(Request.Query["next"]);', "CS010")
+    assert finding.cwe == "CWE-601"
+    assert finding.severity is Severity.HIGH
+    assert finding.source == "Request.Query"
+    assert finding.sink == "Response.Redirect()"
+
+
+def test_mvc_redirect_tracks_assigned_query_value(cs):
+    findings = cs('var target = Request.Query["next"];\nRedirect(target);', "CS010")
+    assert len(findings) == 1 and findings[0].line == 4
+
+
+def test_local_redirect_and_fixed_target_are_not_reported(cs):
+    assert cs('LocalRedirect(Request.Query["next"]);', "CS010") == []
+    assert cs('Response.Redirect("/dashboard");', "CS010") == []
+
+
+def test_redirect_inside_positive_local_url_guard_is_not_reported(cs):
+    code = '''
+    class Demo : Controller {
+        IActionResult Go() {
+            var destination = Request.Query["next"];
+            if (Url.IsLocalUrl(destination)) {
+                return Redirect(destination);
+            }
+            return BadRequest();
+        }
+    }
+    '''
+    assert cs(code, "CS010", wrap=False) == []
+
+
+def test_redirect_after_early_rejection_of_nonlocal_url_is_not_reported(cs):
+    code = '''
+    class Demo : Controller {
+        IActionResult Go() {
+            var destination = Request.Query["next"];
+            if (!Url.IsLocalUrl(destination)) return BadRequest();
+            return Redirect(destination);
+        }
+    }
+    '''
+    assert cs(code, "CS010", wrap=False) == []
+
+
+def test_local_url_check_for_a_different_value_does_not_suppress(cs):
+    code = '''
+    if (Url.IsLocalUrl("/dashboard")) {
+        Response.Redirect(Request.Query["next"]);
+    }
+    '''
+    assert cs(code, "CS010")

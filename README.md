@@ -10,8 +10,8 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 | Ngôn ngữ | Đuôi file | Parser | Rule |
 |---|---|---|---|
 | Python | `.py` | `ast` (thư viện chuẩn) | PY001–PY018 |
-| Java | `.java` | tree-sitter-java | JV001–JV009 |
-| C# | `.cs` | tree-sitter-c-sharp | CS001–CS009 |
+| Java | `.java` | tree-sitter-java | JV001–JV010 |
+| C# | `.cs` | tree-sitter-c-sharp | CS001–CS010 |
 | PHP | `.php` | tree-sitter-php | PH001–PH013 |
 
 ---
@@ -29,7 +29,7 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 
 ## 2. Tính năng
 
-- **49 security rules**: 18 cho Python, 9 cho Java, 9 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
+- **51 security rules**: 18 cho Python, 10 cho Java, 10 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
 - **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
   `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
 - **Taint tracking** (hỗ trợ inter-procedural trong file/class) cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
@@ -223,7 +223,7 @@ Xem đầy đủ bằng `python main.py rules`.
 ### Java và C#
 
 Hai ngôn ngữ dùng cùng một bộ logic (`_ts_common.py`) và cách chấm điểm giống Python:
-tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, hằng số → LOW hoặc không báo,
+severity tùy từng rule; nguồn tainted tới sink nguy hiểm thường là CRITICAL, open redirect là HIGH,
 đi qua sanitizer → LOW.
 
 | CWE | Java | C# | Ghi chú |
@@ -237,6 +237,11 @@ tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, h�
 | CWE-330 | **JV007** `java.util.Random`, `Math.random` cho token/otp... | **CS007** `System.Random` cho token/otp... | `SecureRandom`, `RandomNumberGenerator` → không báo |
 | CWE-798 | **JV008** secret theo tên + entropy, key đã biết, `password=` trong JDBC URL | **CS008** như Java + `Password=` trong connection string, property initializer | giá trị bị che |
 | CWE-295 | **JV009** TrustManager rỗng, `verify()` luôn `true`, `NoopHostnameVerifier` | **CS009** callback trả `true`, `DangerousAcceptAnyServerCertificateValidator` | |
+| CWE-601 | **JV010** `sendRedirect`, Spring `RedirectView` nhận URL từ request | **CS010** ASP.NET `Response.Redirect`/`Redirect` nhận URL từ request | Input không tin cậy → HIGH; ưu tiên route cố định, allow-list host hoặc `LocalRedirect` |
+
+Chi tiết `JV010`/`CS010` giải thích luồng nguồn → đích, có ví dụ URL bị lợi dụng và khuyến nghị theo ngôn ngữ. Với C#,
+`Response.Redirect(destination)` trong nhánh đã kiểm tra chính xác `Url.IsLocalUrl(destination)` được coi là nội bộ;
+`LocalRedirect` cũng không bị báo. Các kiểm tra allow-list do dự án tự viết cần được khai báo rõ trong `sink_sanitizers.url`.
 
 ### PHP
 
@@ -367,6 +372,16 @@ os.system(command)
     Source: input()  Sink: os.system()
     Taint path: input() -> command -> os.system()
 ```
+
+Với Java/C#, có thể cấu hình `sink_sanitizers.url` trong file taint tương ứng để khai báo helper của dự án mà
+**trả về URL đã xác thực theo allow-list**. Ghép mục này vào cấu hình hiện có, giữ nguyên sources và sanitizer khác:
+
+```json
+"url": ["RedirectPolicy.onlyAllowed"]
+```
+
+Khi helper nhận input tainted và trả giá trị đã kiểm tra, luồng được đánh dấu an toàn cho redirect. Chỉ khai báo
+helper thực hiện allow-list; mã hóa URL hoặc kiểm tra cú pháp đơn thuần không ngăn chuyển hướng tới máy chủ ngoài.
 
 Với Java/C#, source gồm lời gọi (`request.getParameter()`, `Console.ReadLine()`, `System.getenv()`),
 thành viên (`Request.Query`, `Request.Form`), **tham số có annotation/attribute** (`@RequestParam`,

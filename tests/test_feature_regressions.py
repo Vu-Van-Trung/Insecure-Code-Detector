@@ -196,6 +196,40 @@ new ProcessBuilder("sh", "-c", Custom.escape(System.getenv("A")), System.getenv(
     assert scan(engine, code, "java", "JV001")[0].severity is Severity.CRITICAL
 
 
+@pytest.mark.parametrize("language,extension,source,sink,rule_id", [
+    ("java", "java", 'response.sendRedirect(RedirectPolicy.onlyAllowed(request.getParameter("next")));',
+     "response.sendRedirect()", "JV010"),
+    ("csharp", "cs", 'Response.Redirect(RedirectPolicy.onlyAllowed(Request.Query["next"]));',
+     "Response.Redirect()", "CS010"),
+])
+def test_configured_url_allowlist_sanitizer_prevents_open_redirect_finding(
+    language, extension, source, sink, rule_id,
+):
+    settings = AnalyzerSettings.load()
+    config = settings.language_taint[language]
+    sanitizers = {**config.sink_sanitizers,
+                  "url": config.sink_sanitizers.get("url", frozenset()) | {"RedirectPolicy.onlyAllowed"}}
+    config = replace(config, sink_sanitizers=sanitizers)
+    engine = AnalyzerEngine(settings=settings.with_changes(
+        language_taint={**settings.language_taint, language: config}))
+    assert scan(engine, source, extension, rule_id) == []
+
+
+def test_open_redirect_detail_page_explains_risk_and_safe_handling(tmp_path):
+    app = create_app(store=ScanStore(tmp_path / "redirect-details"))
+    source = '''class C { void go(HttpServletRequest request, HttpServletResponse response) throws Exception {
+        response.sendRedirect(request.getParameter("returnUrl"));
+    } }'''
+    with TestClient(app) as client:
+        scanned = client.post("/api/scan", json={"code": source, "filename": "Redirect.java"}).json()
+        scan_id = scanned["scan_id"]
+        detail = client.get(f"/scan/{scan_id}/finding/0")
+    assert detail.status_code == 200
+    assert "Why this was flagged" in detail.text
+    assert "/login?returnUrl=https://attacker.example" in detail.text
+    assert "Map a return option to a fixed local route" in detail.text
+
+
 @pytest.mark.parametrize("path,expected", [
     ("src/a #%.py", "src/a%20%23%25.py"),
     ("C:\\source\\a b.py", "file:///C:/source/a%20b.py"),

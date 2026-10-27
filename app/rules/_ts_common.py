@@ -253,6 +253,36 @@ class SqlRuleBase(TSRule):
             word in self.db_words for word in split_identifier(type_name))
 
 
+# --------------------------------------------------------------------------- open redirect
+
+
+class OpenRedirectRuleBase(TSRule):
+    """JV010 / CS010: untrusted redirect destinations in web response APIs."""
+
+    _abstract_rule = True
+    severity = Severity.HIGH
+    cwe = "CWE-601"
+    category = "Open Redirect"
+
+    def report_redirect(self, call: Any, ctx: TSContext) -> Finding | None:
+        """Report only destinations proven to originate from an untrusted source."""
+        if not call.args:
+            return None
+        destination = call.args[0]
+        kind, info = classify_argument(destination, ctx)
+        if info is None or "url" in info.safe_for:
+            return None
+        if kind is ArgumentKind.TAINTED:
+            return self.tainted_finding(
+                call.node, ctx, info, call.display,
+                f"Untrusted input from {info.source} controls the redirect destination passed to {call.display}.",
+                severity=Severity.HIGH,
+            )
+        if kind is ArgumentKind.SANITIZED:
+            return self.sanitized_finding(call.node, ctx, info, call.display)
+        return None
+
+
 # --------------------------------------------------------------------------- deserialization, code injection
 
 

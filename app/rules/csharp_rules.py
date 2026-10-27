@@ -19,6 +19,7 @@ from app.rules._ts_common import (
     DeserializationRuleBase,
     HardcodedSecretRuleBase,
     InsecureRandomRuleBase,
+    OpenRedirectRuleBase,
     SqlRuleBase,
     TSRule,
     WeakAlgorithmRuleBase,
@@ -282,3 +283,99 @@ class CSharpTlsValidationRule(TSRule):
                     or "DangerousAcceptAnyServerCertificateValidator" in text:
                 yield self.create_finding(node, ctx, f"{target.rsplit('.', 1)[-1]} accepts every certificate.",
                                           confidence=0.9)
+
+
+@register_rule
+class CSharpOpenRedirectRule(OpenRedirectRuleBase):
+    """CS010: ASP.NET response/controller redirect APIs that accept external URLs."""
+
+    id = "CS010"
+    language = CSHARP
+    name = "Open redirect"
+    description = (
+        "A redirect destination taken from an untrusted request value can send users to an attacker-controlled "
+        "site for phishing or to bypass trust in the application domain."
+    )
+    recommendation = (
+        "Use LocalRedirect for local paths where available. Otherwise redirect only to fixed routes or validate "
+        "the destination against an allow-list of trusted hosts or route identifiers."
+    )
+
+    def check_file(self, ctx: TSContext) -> Iterator[Finding]:
+        response_receivers = {"Response", "HttpResponse", "HttpResponseBase", "HttpResponseWrapper"}
+        framework_receivers = {"Results", "TypedResults"}
+        for call in ctx.calls:
+            if call.method != "Redirect" or call.is_constructor or not call.args:
+                continue
+            receiver = (call.receiver_text or "").rsplit(".", 1)[-1]
+            receiver_type = call.receiver_type or ""
+            # Also match Controller.Redirect(url), represented as an unqualified call.
+            if receiver not in response_receivers | framework_receivers and receiver_type not in response_receivers:
+                if call.receiver is not None:
+                    continue
+            if self._is_local_url_guarded(ctx, call):
+                continue
+            finding = self.report_redirect(call, ctx)
+            if finding is not None:
+                yield finding
+
+    @staticmethod
+    def _is_local_url_guarded(ctx: TSContext, redirect) -> bool:  # type: ignore[no-untyped-def]
+        """Recognize an exact Url.IsLocalUrl check enclosing the redirect's safe branch."""
+        adapter = ctx.adapter
+        destination = "".join(adapter.text(adapter.unwrap(redirect.args[0])).split())
+        if not destination:
+            return False
+        expected = f"Url.IsLocalUrl({destination})"
+        negated = f"!{expected}"
+        guards = [
+            guard for guard in ctx.calls
+            if guard.method == "IsLocalUrl" and guard.receiver_text == "Url" and len(guard.args) == 1
+            and "".join(adapter.text(adapter.unwrap(guard.args[0])).split()) == destination
+        ]
+        parent = redirect.node.parent
+        while parent is not None:
+            if parent.type == "if_statement":
+                condition = parent.child_by_field_name("condition")
+                consequence = parent.child_by_field_name("consequence")
+                alternative = parent.child_by_field_name("alternative")
+                condition_text = "".join(adapter.text(condition).split())
+                in_consequence = consequence is not None and consequence.start_byte <= redirect.node.start_byte \
+                    and redirect.node.end_byte <= consequence.end_byte
+                in_alternative = alternative is not None and alternative.start_byte <= redirect.node.start_byte \
+                    and redirect.node.end_byte <= alternative.end_byte
+                for guard in guards:
+                    if condition is None or not (condition.start_byte <= guard.node.start_byte
+                                                  and guard.node.end_byte <= condition.end_byte):
+                        continue
+                    if (condition_text == expected and in_consequence) or (condition_text == negated and in_alternative):
+                        return True
+            parent = parent.parent
+
+        # Also accept the common early-exit form:
+        # if (!Url.IsLocalUrl(destination)) return BadRequest(); return Redirect(destination);
+        statement = redirect.node
+        while statement.parent is not None and statement.parent.type != "block":
+            statement = statement.parent
+        block = statement.parent
+        if block is not None:
+            siblings = list(block.named_children)
+            position = next((i for i, child in enumerate(siblings) if child.id == statement.id), -1)
+            if position > 0:
+                previous = siblings[position - 1]
+                if previous.type == "if_statement":
+                    condition = previous.child_by_field_name("condition")
+                    consequence = previous.child_by_field_name("consequence")
+                    alternative = previous.child_by_field_name("alternative")
+                    condition_text = "".join(adapter.text(condition).split())
+                    exits_early = consequence is not None and (
+                        consequence.type in {"return_statement", "throw_statement"}
+                        or (consequence.type == "block" and consequence.named_children
+                            and all(child.type in {"return_statement", "throw_statement"}
+                                    for child in consequence.named_children))
+                    )
+                    if alternative is None and exits_early and condition_text == negated:
+                        if any(condition is not None and condition.start_byte <= guard.node.start_byte
+                               and guard.node.end_byte <= condition.end_byte for guard in guards):
+                            return True
+        return False

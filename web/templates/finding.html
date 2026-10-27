@@ -51,6 +51,23 @@
     </ol>
     {% endif %}
 
+    {% if finding.rule_id in ["JV010", "CS010"] %}
+    <section class="redirect-explanation mb-4" aria-labelledby="redirect-explanation-title">
+      <h2 class="h6" id="redirect-explanation-title" data-i18n="redirect_explanation_title">Why this was flagged</h2>
+      <p class="mb-3" data-i18n="redirect_explanation_body">A request value can be changed by a visitor. If it reaches a redirect destination without an allow-list check, the application may send the visitor to a phishing site.</p>
+      <div class="redirect-example">
+        <span class="small text-secondary" data-i18n="redirect_example_label">Example request</span>
+        <code>/login?returnUrl=https://attacker.example</code>
+      </div>
+      <h3 class="h6 mt-3" data-i18n="redirect_safer_title">Safer handling</h3>
+      {% if finding.language == "csharp" %}
+      <p class="mb-0" data-i18n="redirect_safer_csharp">Use LocalRedirect for local paths, or check Url.IsLocalUrl in the branch that performs Redirect. For external destinations, allow only explicitly trusted hosts.</p>
+      {% else %}
+      <p class="mb-0" data-i18n="redirect_safer_java">Map a return option to a fixed local route. If external redirects are required, validate the host against an explicit allow-list before calling sendRedirect.</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
     <h2 class="h6" data-i18n="recommendation">Recommendation</h2>
     <div class="alert alert-success mb-0"><i class="bi bi-lightbulb"></i> {{ finding.recommendation }}</div>
   </div>

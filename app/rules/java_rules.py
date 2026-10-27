@@ -18,6 +18,7 @@ from app.rules._ts_common import (
     DeserializationRuleBase,
     HardcodedSecretRuleBase,
     InsecureRandomRuleBase,
+    OpenRedirectRuleBase,
     SqlRuleBase,
     TSRule,
     WeakAlgorithmRuleBase,
@@ -284,3 +285,28 @@ class JavaTlsValidationRule(TSRule):
                     or self._ALLOW_ALL.search(adapter.text(argument)):
                 yield self.create_finding(call.node, ctx, f"{call.display} disables hostname verification.",
                                           confidence=0.9)
+
+
+@register_rule
+class JavaOpenRedirectRule(OpenRedirectRuleBase):
+    """JV010: HttpServletResponse.sendRedirect / Spring RedirectView."""
+
+    id = "JV010"
+    language = JAVA
+    name = "Open redirect"
+    description = (
+        "A redirect destination taken from an untrusted request value can send users to an attacker-controlled "
+        "site for phishing or to bypass trust in the application domain."
+    )
+    recommendation = (
+        "Prefer redirects to fixed local routes. If a destination must be configurable, validate it against an "
+        "allow-list of trusted hosts or route identifiers before redirecting."
+    )
+
+    def check_file(self, ctx: TSContext) -> Iterator[Finding]:
+        for call in ctx.calls:
+            # sendRedirect is the servlet response API; RedirectView is Spring MVC's redirect sink.
+            if call.method == "sendRedirect" or (call.is_constructor and call.method == "RedirectView"):
+                finding = self.report_redirect(call, ctx)
+                if finding is not None:
+                    yield finding

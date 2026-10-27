@@ -1,4 +1,4 @@
-"""Java rules JV001 - JV009 and Java taint tracking (tree-sitter)."""
+"""Java rules JV001 - JV010 and Java taint tracking (tree-sitter)."""
 
 import textwrap
 
@@ -246,6 +246,26 @@ def test_syntax_error_is_reported(engine):
 def test_comment_and_string_are_not_code(java):
     code = '// Runtime.getRuntime().exec(request.getParameter("x"));\nString s = "Runtime.getRuntime().exec(x)";'
     assert java(code, "JV001") == []
+
+
+# ---------------------------------------------------------------- JV010 open redirect
+
+
+def test_open_redirect_from_request_parameter(java):
+    [finding] = java('response.sendRedirect(request.getParameter("next"));', "JV010")
+    assert finding.cwe == "CWE-601"
+    assert finding.severity is Severity.HIGH
+    assert finding.source == "request.getParameter()"
+    assert finding.sink == "response.sendRedirect()"
+
+
+def test_open_redirect_tracks_assigned_request_value(java):
+    findings = java('String target = request.getParameter("next");\nresponse.sendRedirect(target);', "JV010")
+    assert len(findings) == 1 and findings[0].line == 4
+
+
+def test_fixed_redirect_target_is_not_reported(java):
+    assert java('response.sendRedirect("/dashboard");', "JV010") == []
 
 
 def test_generic_encoder_does_not_sanitize_sql(java):
