@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Xem tệp - {{ name }}</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  <div class="wrap">
+    <h1>Xem tệp: {{ name }} <span class="tag">{{ version }}</span></h1>
+    <p class="meta">Đường dẫn thực tế trên máy chủ: <code>{{ path }}</code></p>
+    <pre>{{ content }}</pre>
+    <a href="{{ url_for('index') }}">← Quay lại</a>
+  </div>
+</body>
+</html>

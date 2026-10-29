@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Quản lý người dùng (Java)</title>
+  <style>
+    body { font-family: Segoe UI, Arial, sans-serif; background: #f4f6f8; margin: 0; }
+    .wrap { max-width: 900px; margin: 30px auto; background: #fff; padding: 24px; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    h1 { font-size: 22px; margin-top: 0; }
+    h2 { font-size: 17px; margin-top: 24px; }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; padding: 8px; }
+    button { padding: 8px 16px; background: #2c3e50; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+    pre { background: #1e1e1e; color: #dcdcaa; padding: 10px; white-space: pre-wrap; word-break: break-all; font-size: 12px; min-height: 40px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Quản lý người dùng — Spring Boot (ĐÃ SỬA)</h1>
+
+    <h2>Đăng nhập</h2>
+    <form id="login">
+      <input name="username" placeholder="Tên đăng nhập" autocomplete="off">
+      <input name="password" type="password" placeholder="Mật khẩu">
+      <button>Đăng nhập</button>
+    </form>
+    <pre id="login-out"></pre>
+
+    <h2>Tìm kiếm người dùng</h2>
+    <form id="search">
+      <input name="q" placeholder="Tên đăng nhập hoặc họ tên" autocomplete="off">
+      <button>Tìm kiếm</button>
+    </form>
+    <pre id="search-out"></pre>
+  </div>
+  <script>
+    async function show(res, el) {
+      document.getElementById(el).textContent = res.status + "\n" + JSON.stringify(await res.json(), null, 2);
+    }
+    document.getElementById("login").addEventListener("submit", async e => {
+      e.preventDefault();
+      show(await fetch("/api/login", { method: "POST", body: new FormData(e.target) }), "login-out");
+    });
+    document.getElementById("search").addEventListener("submit", async e => {
+      e.preventDefault();
+      const q = new FormData(e.target).get("q");
+      show(await fetch("/api/users/search?q=" + encodeURIComponent(q)), "search-out");
+    });
+  </script>
+</body>
+</html>

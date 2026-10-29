@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Thông tin tệp - {{ name }}</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  <div class="wrap">
+    <h1>Thông tin tệp: {{ name }} <span class="tag">{{ version }}</span></h1>
+    <p class="meta">Lệnh đã thực thi: <code>{{ command }}</code></p>
+    <pre>{{ output }}</pre>
+    <a href="{{ url_for('index') }}">← Quay lại</a>
+  </div>
+</body>
+</html>

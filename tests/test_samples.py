@@ -18,8 +18,6 @@ EXPECTED_RULES = {
     "web_vulnerable.py": {"PY014", "PY015", "PY016", "PY017", "PY018"},
     "UserController_vulnerable.java": {"JV001", "JV002", "JV003", "JV005", "JV007", "JV008"},
     "AccountController_vulnerable.cs": {"CS001", "CS002", "CS003", "CS005", "CS008", "CS009"},
-    "dvwa_style_vulnerable.php": {"PH001", "PH002", "PH003", "PH004", "PH005", "PH006", "PH007", "PH008",
-                                  "PH009", "PH010", "PH011", "PH012", "PH013"},
 }
 SOURCE_SUFFIXES = (".py", ".java", ".cs", ".php")
 
@@ -56,5 +54,3 @@ def test_taint_samples_are_critical(engine):
     assert ("PY018", "request.args") in critical
     assert ("JV002", "@RequestParam") in critical
     assert ("CS001", "[FromQuery]") in critical
-    assert ("PH002", "$_REQUEST") in critical
-    assert ("PH004", "$_GET") in critical

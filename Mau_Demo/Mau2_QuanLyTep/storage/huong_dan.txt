@@ -1,0 +1,2 @@
+Hướng dẫn sử dụng kho tài liệu nội bộ.
+Nhấn "Xem" để đọc tệp, "Tải về" để tải tệp, "Thông tin" để xem kích thước và ngày sửa.

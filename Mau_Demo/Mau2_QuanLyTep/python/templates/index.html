@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>Quản lý tệp</title>
+  {% include "_style.html" %}
+</head>
+<body>
+  <div class="wrap">
+    <h1>Kho tài liệu nội bộ <span class="tag">{{ version }}</span></h1>
+    <table>
+      <tr><th>Tên tệp</th><th>Thao tác</th></tr>
+      {% for f in files %}
+      <tr>
+        <td>{{ f }}</td>
+        <td>
+          <a href="{{ url_for('view_file', name=f) }}">Xem</a> ·
+          <a href="{{ url_for('download_file', name=f) }}">Tải về</a> ·
+          <a href="{{ url_for('file_info', name=f) }}">Thông tin</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</body>
+</html>

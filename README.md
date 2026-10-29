@@ -14,6 +14,13 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 | C# | `.cs` | tree-sitter-c-sharp | CS001–CS009 |
 | PHP | `.php` | tree-sitter-php | PH001–PH013 |
 
+**Thử ngay trong 1 phút** với bộ mẫu demo đi kèm (xem [mục 5](#5-chạy-thử-với-mẫu-demo)):
+
+```powershell
+python main.py scan Mau_Demo\Mau1_QuanLyNguoiDung\python\vulnerable   # 5 lỗ hổng: SQLi, secret, MD5
+python main.py scan Mau_Demo\Mau1_QuanLyNguoiDung\python\fixed        # 0 lỗ hổng
+```
+
 ---
 
 ## 1. Tổng quan
@@ -24,6 +31,7 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 | CLI | `python main.py scan <file_or_directory>` — dùng được trong CI/CD (exit code, SARIF output) |
 | Web UI | FastAPI + Bootstrap 5 + Chart.js tại `http://127.0.0.1:8000` (có CSRF protection, hỗ trợ Basic Auth / API Key) |
 | Report | JSON, CSV, HTML, SARIF (v2.1.0 cho GitHub Code Scanning) |
+| Mẫu demo | `Mau_Demo/`: 2 website (quản lý người dùng, quản lý tệp) × 3 ngôn ngữ, mỗi bản có `vulnerable/` và `fixed/` |
 
 Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/SonarQube/CodeQL làm engine.
 
@@ -32,8 +40,8 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 - **49 security rules**: 18 cho Python, 9 cho Java, 9 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
 - **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
   `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
-- **Taint tracking** (hỗ trợ inter-procedural trong file/class) cho cả 3 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
-  (vd `@RequestParam -> name -> sql -> Statement.executeQuery()`, `[FromQuery] -> host -> Process.Start()`).
+- **Taint tracking** (hỗ trợ inter-procedural trong file/class) cho cả 4 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
+  (vd `@RequestParam -> q -> sql -> Statement.executeQuery()`, `[FromQuery] -> name -> path -> arguments -> ProcessStartInfo`).
 - **Sanitizer** cấu hình được (`shlex.quote`, `int`, ...). Luồng đã sanitize vẫn được báo ở mức LOW.
   **Sanitizer theo loại sink** (`secure_filename` cho path, `html.escape` cho HTML) hỗ trợ cho cả Python, Java và C#.
 - **Severity theo ngữ cảnh**: cùng `os.system()` nhưng `input()` → CRITICAL, hằng số → LOW.
@@ -43,7 +51,9 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 - **Bảo mật của chính ứng dụng**: CSRF protection (token có chữ ký, bắt buộc cho form scan), tuỳ chọn xác thực HTTP Basic Auth & API Key,
   không thực thi code upload, không ghi file upload xuống đĩa, chống path traversal, giới hạn kích thước/số lượng/extension, CSP, escape toàn bộ output.
 - **CI/CD Integration**: Xuất chuẩn SARIF v2.1.0 và template GitHub Actions (`.github/workflows/security-scan.yml`).
+- **Lịch sử scan** của Web UI lưu dạng JSON trong `data/scans/`.
 - **Logging** vào `logs/analyzer.log` (chỉ metadata, không log source code hay secret).
+  Thư mục `data/` và `logs/` được tạo tự động khi chạy, không nằm trong repository.
 - **Kiểm thử tự động** bằng pytest; chạy `python -m pytest -q` để xem kết quả hiện tại.
 
 ## 3. Kiến trúc
@@ -51,18 +61,18 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 ```text
                 +-------------------+      +---------------------+
   CLI  -------> |                   |      |  Rules (plugins)    |
-  (main.py)     |   AnalyzerEngine  | ---> |  PY001 ... PY018    |
+  (main.py)     |   AnalyzerEngine  | ---> |  PY / JV / CS / PH  |
                 |   (app/analyzer)  |      |  auto-discovered    |
   Web UI -----> |                   |      +---------------------+
   (FastAPI)     +---------+---------+
                           |
-     languages.py   -> chọn ngôn ngữ theo đuôi file (.py / .java / .cs)
-     Python:  parser.py (ast.parse) -> context.py -> taint.py -> visitor.py (ast.NodeVisitor)
-     Java/C#: ts/adapters.py (tree-sitter -> mô hình chung: CallSite, khai báo, phép gán, method)
-              -> ts/context.py (suy luận kiểu biến) -> ts/taint.py
+     languages.py   -> chọn ngôn ngữ theo đuôi file (.py / .java / .cs / .php)
+     Python:      parser.py (ast.parse) -> context.py -> taint.py -> visitor.py (ast.NodeVisitor)
+     Java/C#/PHP: ts/adapters.py (tree-sitter -> mô hình chung: CallSite, khai báo, phép gán, method)
+                  -> ts/context.py (suy luận kiểu biến) -> ts/taint.py
      suppression.py -> # / // analyzer-ignore
                           |
-                    ScanResult  ---> reports/ (JSON, CSV, HTML)
+                    ScanResult  ---> reports/ (JSON, CSV, HTML, SARIF)
 ```
 
 Pipeline cho mỗi file:
@@ -78,19 +88,23 @@ Cấu trúc thư mục:
 app/
   main.py              FastAPI web app
   cli.py               CLI (được gọi từ main.py ở thư mục gốc)
+  security.py          CSRF token, Basic Auth / API Key cho Web UI
   storage.py           Lưu kết quả scan của web dạng JSON (data/scans/)
   logging_config.py    Cấu hình logging
   analyzer/            parser, context, visitor, engine, taint, suppression, languages, utils
   analyzer/ts/         adapters (Java, C#, PHP), context, taint cho tree-sitter
-  rules/               base, registry, rule Python (15 file), java_rules.py, csharp_rules.py,
-                       _ts_common.py (lớp cơ sở Java/C#), _keywords.py, _values.py (helper dùng chung)
+  rules/               base, registry, rule Python (15 file), java_rules.py, csharp_rules.py, php_rules.py,
+                       _ts_common.py (lớp cơ sở Java/C#/PHP), _keywords.py, _values.py (helper dùng chung)
   models/finding.py    Finding, ScanResult, Severity
-  reports/             json_report, csv_report, html_report
+  reports/             json_report, csv_report, html_report, sarif_report
   config/              rules.json, severity.json, taint.json (Python), taint_java.json, taint_csharp.json,
-                       settings.py, loader.py
+                       taint_php.json, settings.py, loader.py
 web/templates, web/static   Giao diện (Jinja2, Bootstrap, Chart.js, app.js)
+Mau_Demo/              2 website demo × Python/C#/Java, bản vulnerable/ và fixed/ (xem Mau_Demo/README.md)
 tests/                 unit test + tests/vulnerable, tests/safe (fixture có marker # expect:)
-samples/               mẫu demo vulnerable/ và safe/
+samples/               mẫu nhỏ theo từng rule: vulnerable/, safe/ và testbench/ (dùng trong test_samples.py)
+.github/workflows/     security-scan.yml (scan SARIF trên GitHub Actions)
+main.py                điểm vào CLI / Web
 whitelist.json, blacklist.json
 ```
 
@@ -144,10 +158,167 @@ pip install -r requirements.txt
 ```
 
 Phân tích Python chỉ cần thư viện chuẩn. Phân tích Java/C#/PHP cần `tree-sitter`, `tree-sitter-java`,
-`tree-sitter-c-sharp`, `tree-sitter-php` (có bản dựng sẵn, không cần cài JDK hay .NET). Nếu thiếu, file Java/C# được báo lỗi
+`tree-sitter-c-sharp`, `tree-sitter-php` (có bản dựng sẵn, không cần cài JDK hay .NET). Nếu thiếu, file Java/C#/PHP được báo lỗi
 `LanguageUnavailable` còn file Python vẫn được scan bình thường.
 
-## 5. Chạy Web
+## 5. Chạy thử với mẫu demo
+
+> **Các bản `vulnerable/` cố ý chứa lỗ hổng.** Chỉ chạy trên máy cá nhân (127.0.0.1), không triển khai lên mạng.
+> Mọi secret trong đó là giá trị giả.
+
+Thư mục `Mau_Demo/` gồm hai website nhỏ, mỗi website viết bằng **Python (Flask), C# (ASP.NET Core 8) và
+Java (Spring Boot 3)** với cùng chức năng. Mỗi bản có hai phiên bản: `vulnerable/` (có lỗ hổng) và `fixed/` (đã sửa).
+
+```text
+Mau_Demo/
+├── Mau1_QuanLyNguoiDung/   Website quản lý người dùng: Hardcoded Secret, SQL Injection, MD5 cho mật khẩu
+│   └── python/ csharp/ java/   (mỗi thư mục có vulnerable/ và fixed/)
+└── Mau2_QuanLyTep/         Website quản lý tệp: Path Traversal, Command Injection
+    ├── python/ csharp/ java/
+    ├── python/demo_ast_taint.py   script minh họa AST + taint analysis
+    ├── storage/                   tệp được phép xem
+    └── secret/config.txt          tệp bí mật giả lập (nằm ngoài storage)
+```
+
+Cách chạy từng website và kịch bản tấn công từng bước có trong [Mau_Demo/README.md](Mau_Demo/README.md).
+
+### 5.1. Quét bằng CLI
+
+```powershell
+# Một dự án
+python main.py scan Mau_Demo\Mau1_QuanLyNguoiDung\java\vulnerable
+
+# So sánh bản lỗi và bản sửa của cả 12 dự án
+foreach ($m in "Mau1_QuanLyNguoiDung", "Mau2_QuanLyTep") {
+  foreach ($lang in "python", "csharp", "java") {
+    foreach ($v in "vulnerable", "fixed") {
+      Write-Host "== $m\$lang\$v"
+      python main.py scan "Mau_Demo\$m\$lang\$v"
+    }
+  }
+}
+
+# Xuất báo cáo HTML cho cả bộ mẫu
+python main.py scan Mau_Demo --format html -o bao_cao.html
+```
+
+Kết quả:
+
+| Mẫu | Ngôn ngữ | Bản `vulnerable` | Bản `fixed` |
+|---|---|---|---|
+| Mẫu 1 — Quản lý người dùng | Python | 5 (2 CRITICAL, 3 HIGH) | 0 |
+| | C# | 5 (2 CRITICAL, 2 HIGH, 1 MEDIUM) | 0 |
+| | Java | 5 (2 CRITICAL, 2 HIGH, 1 MEDIUM) | 0 |
+| Mẫu 2 — Quản lý tệp | Python | 3 (1 CRITICAL, 2 HIGH) | 0 |
+| | C# | 1 (1 CRITICAL) | 0 |
+| | Java | 1 (1 CRITICAL) | 0 |
+
+Ở Mẫu 2, lỗi Path Traversal của bản C#/Java không được báo (xem [Hạn chế](#14-hạn-chế)).
+
+### 5.2. Output mẫu
+
+```text
+$ python main.py scan Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable
+Secure Code Analyzer v1.1
+
+Scanning: Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable
+
+Files scanned: 1
+Lines scanned: 126
+
+CRITICAL: 2
+HIGH:     3
+MEDIUM:   0
+LOW:      0
+INFO:     0
+
+Total findings: 5
+
+Findings:
+  [HIGH] PY007 Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable/app.py:25:17 - High-entropy string assigned to 'secret_key' looks like a hardcoded secret. (CWE-798, confidence 85%)
+      app.secret_key = "flas********"
+  [HIGH] PY007 Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable/app.py:26:16 - Hardcoded Stripe live secret key found in a string literal. (CWE-798, confidence 95%)
+      ADMIN_API_KEY = "sk_l********"
+  [HIGH] PY008 Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable/app.py:38:11 - MD5 is used to hash a password. (CWE-328, confidence 85%)
+      return hashlib.md5(password.encode()).hexdigest()
+  [CRITICAL] PY011 Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable/app.py:77:19 - Untrusted input from request.form is used to build the SQL query passed to .execute(). (CWE-89, confidence 95%)
+      user = get_db().execute(query).fetchone()
+      Source: request.form  Sink: .execute()
+      Taint path: request.form -> username -> query -> .execute()
+  [CRITICAL] PY011 Mau_Demo/Mau1_QuanLyNguoiDung/python/vulnerable/app.py:102:15 - Untrusted input from request.args is used to build the SQL query passed to .execute(). (CWE-89, confidence 95%)
+      rows = get_db().execute(query).fetchall()
+      Source: request.args  Sink: .execute()
+      Taint path: request.args -> keyword -> query -> .execute()
+```
+
+Secret bị che (`flas********`) để report không làm lộ secret thật. Exit code là `1` vì có finding.
+
+### 5.3. Cùng một lỗ hổng trên ba ngôn ngữ
+
+Công cụ nhận ra cùng một luồng dữ liệu trên cả ba ngôn ngữ:
+
+| Lỗ hổng | Python | C# | Java |
+|---|---|---|---|
+| Hardcoded Secret (CWE-798) | PY007 `app.secret_key`, `ADMIN_API_KEY` | CS008 `TokenSigningKey`, `AdminApiKey` | JV008 `TOKEN_SIGNING_KEY`, `ADMIN_API_KEY` |
+| SQLi — đăng nhập (CWE-89) | PY011 `request.form -> username -> query -> .execute()` | CS002 `[FromForm] -> username -> sql -> new SqliteCommand()` | JV002 `@RequestParam -> username -> sql -> Statement.executeQuery()` |
+| SQLi — tìm kiếm (CWE-89) | PY011 `request.args -> keyword -> query -> .execute()` | CS002 `[FromQuery] -> q -> cmd.CommandText` | JV002 `@RequestParam -> q -> sql -> Statement.executeQuery()` |
+| Weak Crypto (CWE-328) | PY008 `hashlib.md5(password)` | CS005 `MD5.Create()` | JV005 `MessageDigest.getInstance("MD5")` |
+| Path Traversal (CWE-22) | PY014 `request.args -> name -> path -> open()`, `flask.send_file()` | *không báo* | *không báo* |
+| Command Injection (CWE-78) | PY004 `request.args -> name -> path -> command -> subprocess.run()` | CS001 `[FromQuery] -> name -> path -> arguments -> ProcessStartInfo` | JV001 `@RequestParam -> name -> path -> command -> ProcessBuilder` |
+
+### 5.4. Vì sao bản `fixed` không còn cảnh báo
+
+Ví dụ SQL Injection ở form tìm kiếm của Mẫu 1 (Python):
+
+```python
+# vulnerable/app.py — PY011 CRITICAL: request.args -> keyword -> query -> .execute()
+keyword = request.args.get("q", "")
+query = (
+    f"SELECT id, username, full_name, email, role FROM users "
+    f"WHERE username LIKE '%{keyword}%' OR full_name LIKE '%{keyword}%'"
+)
+rows = get_db().execute(query).fetchall()
+```
+
+```python
+# fixed/app.py — không báo: dữ liệu người dùng được truyền tách khỏi câu SQL
+query = "SELECT id, username, full_name, email, role FROM users WHERE username LIKE ? OR full_name LIKE ?"
+pattern = f"%{keyword}%"
+rows = get_db().execute(query, (pattern, pattern)).fetchall()
+```
+
+Các cách sửa khác trong bộ mẫu:
+
+| Lỗ hổng | Python | C# | Java |
+|---|---|---|---|
+| Hardcoded Secret | `os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)` | `Environment.GetEnvironmentVariable(...)` / `RandomNumberGenerator` | `System.getenv(...)` / `SecureRandom` |
+| SQL Injection | `execute("... = ?", (username,))` | `@username` + `Parameters.AddWithValue` | `PreparedStatement` + `setString` |
+| Weak Crypto | `hashlib.pbkdf2_hmac("sha256", ...)` + `hmac.compare_digest` | `Rfc2898DeriveBytes.Pbkdf2(..., SHA256)` | `PBKDF2WithHmacSHA256` + `MessageDigest.isEqual` |
+| Path Traversal | `secure_filename()` + `send_from_directory()` | `Path.GetFileName` + kiểm tra `GetFullPath(...).StartsWith(dir)` | `new File(name).getName()` + `normalize().startsWith(dir)` |
+| Command Injection | `os.stat()` thay cho `subprocess.run(..., shell=True)` | `new FileInfo(path)` | `Files.size()`, `Files.getLastModifiedTime()` |
+
+### 5.5. Quét bằng Web UI
+
+1. `python main.py web` rồi mở http://127.0.0.1:8000.
+2. Chọn tab **Upload Folder** và chọn `Mau_Demo/Mau1_QuanLyNguoiDung` (hoặc cả `Mau_Demo`). File không phải
+   `.py`/`.java`/`.cs`/`.php` (HTML, `pom.xml`, `.csproj`...) được tự động bỏ qua.
+3. **Start Scan** → Dashboard hiển thị số finding theo severity → click một finding để xem Source, Sink và
+   Taint Path → **Export** báo cáo JSON / CSV / HTML / SARIF.
+
+### 5.6. Minh họa AST và taint analysis
+
+```powershell
+cd Mau_Demo\Mau2_QuanLyTep\python
+python demo_ast_taint.py --dump download_file   # 1) cây AST của một hàm
+python demo_ast_taint.py                        # 2) lan truyền taint trên bản lỗi -> 3 cảnh báo
+python demo_ast_taint.py fixed/app.py           # 3) bản sửa: taint bị cắt tại sanitizer -> 0 cảnh báo
+```
+
+Script này mô phỏng lại các bước công cụ làm bên trong: nhận diện *source* (`request.args.get(...)`),
+lan truyền taint qua phép gán, phát cảnh báo khi biến nhiễm đi vào *sink*, và cắt taint tại *sanitizer*
+(`secure_filename`).
+
+## 6. Chạy Web
 
 ```powershell
 python main.py web                  # http://127.0.0.1:8000
@@ -155,34 +326,37 @@ python main.py web --port 8080
 # hoặc: uvicorn app.main:app
 ```
 
-Luồng demo: **Home → Upload file / Paste Code → Start Scan → Dashboard → click finding → Export report**.
+Luồng demo: **Home → Upload file / thư mục / Paste Code → Start Scan → Dashboard → click finding → Export report**.
 
 - Dashboard: Files/Lines scanned, Total findings, số lượng theo Critical/High/Medium/Low/Info,
   biểu đồ Chart.js, bảng finding có lọc theo severity và tìm kiếm.
 - Finding detail: Rule ID, Rule Name, Severity, Confidence, CWE, File, Line, Column, Description,
   Vulnerable Code, Recommendation, Source/Sink và Taint Path.
-- Export: nút JSON / CSV / HTML.
+- Export: nút JSON / CSV / HTML / SARIF.
 - JSON API: `POST /api/scan` (`{"code": "...", "filename": "a.py"}`), `GET /api/scan/{id}`,
   `GET /api/rules`, tài liệu tại `/api/docs`.
 
-Giới hạn upload: chỉ `.py`, `.java`, `.cs`; tối đa 20 file, 1 MB/file, 5 MB/request. Khi paste code, chọn
-ngôn ngữ trong ô *Language* (đuôi file được chỉnh tự động). JSON API nhận thêm `"language": "java" | "csharp"`.
+Giới hạn upload: chỉ `.py`, `.java`, `.cs`, `.php`; tối đa 20 file (hoặc 1000 file nguồn khi upload cả thư mục,
+file khác đuôi được bỏ qua), 1 MB/file, 20 MB/request. Khi paste code, chọn ngôn ngữ trong ô *Language*
+(đuôi file được chỉnh tự động). JSON API nhận thêm `"language": "python" | "java" | "csharp" | "php"`.
 
-## 6. Chạy CLI
+## 7. Chạy CLI
 
 ```powershell
-python main.py scan test.py
-python main.py scan UserController.java
-python main.py scan ./project            # quét cả .py, .java, .cs
-python main.py scan ./project --format json -o report.json
-python main.py scan ./project --format html -o report.html
-python main.py scan ./project --format csv  -o report.csv
+python main.py scan Mau_Demo\Mau1_QuanLyNguoiDung\python\vulnerable\app.py
+python main.py scan Mau_Demo\Mau1_QuanLyNguoiDung\java\vulnerable
+python main.py scan Mau_Demo                                  # quét cả .py, .java, .cs, .php
+python main.py scan Mau_Demo --format json  -o report.json
+python main.py scan Mau_Demo --format html  -o report.html
+python main.py scan Mau_Demo --format csv   -o report.csv
+python main.py scan Mau_Demo --format sarif -o results.sarif
+python main.py scan Mau_Demo --min-severity HIGH --fail-on CRITICAL
 python main.py rules
 ```
 
 | Tùy chọn | Ý nghĩa |
 |---|---|
-| `--format text\|json\|csv\|html` | Định dạng output (mặc định `text`) |
+| `--format text\|json\|csv\|html\|sarif` | Định dạng output (mặc định `text`) |
 | `-o, --output FILE` | Ghi report ra file |
 | `--whitelist FILE` / `--no-whitelist` | Chọn whitelist (mặc định `./whitelist.json` nếu có) |
 | `--blacklist FILE` | Chọn blacklist (mặc định `blacklist.json` của công cụ) |
@@ -193,7 +367,14 @@ python main.py rules
 
 Exit code: `0` không có finding (vượt ngưỡng `--fail-on`), `1` có finding, `2` lỗi sử dụng/cấu hình hoặc lỗi phân tích file.
 
-## 7. Danh sách rule
+Khi file không parse được:
+
+```text
+Errors (1):
+  bad.py:12 - SyntaxError: Python SyntaxError: invalid syntax
+```
+
+## 8. Danh sách rule
 
 Xem đầy đủ bằng `python main.py rules`.
 
@@ -241,7 +422,7 @@ tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, h�
 ### PHP
 
 Dùng chung adapter, taint và lớp cơ sở với Java/C#. Source là các biến toàn cục `$_GET`, `$_POST`,
-`$_REQUEST`, `$_COOKIE`, `$_FILES`, `$_SERVER`; code ở cấp file (ngoài hàm, kiểu DVWA) cũng được phân tích.
+`$_REQUEST`, `$_COOKIE`, `$_FILES`, `$_SERVER`; code ở cấp file (ngoài hàm, kiểu script PHP truyền thống) cũng được phân tích.
 Taint đi qua `.`, `.=`, chuỗi `"...$x..."`/`{$a['k']}`, heredoc và backtick.
 
 | Rule | Phát hiện | Severity | CWE | Không báo / giảm mức |
@@ -263,7 +444,8 @@ Taint đi qua `.`, `.=`, chuỗi `"...$x..."`/`{$a['k']}`, heredoc và backtick.
 ### Severity và Confidence
 
 - Severity: `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, `INFO` — xác định theo **rule và ngữ cảnh**, không phải
-  mọi finding đều CRITICAL. Có thể ghi đè theo rule trong `app/config/severity.json`:
+  mọi finding đều CRITICAL. Ví dụ trong Mẫu 1: MD5 dùng để hash mật khẩu (Python) được nâng lên HIGH,
+  còn `MD5.Create()` (C#) giữ mức MEDIUM. Có thể ghi đè theo rule trong `app/config/severity.json`:
   `{"overrides": {"PY009": "LOW"}}`.
 - Confidence `0.0 → 1.0` là **mức tin cậy heuristic của analyzer, không phải xác suất toán học chính xác**:
 
@@ -274,19 +456,28 @@ Taint đi qua `.`, `.=`, chuỗi `"...$x..."`/`{$a['k']}`, heredoc và backtick.
 | 0.50–0.75 | Dựa vào tên biến / ngữ cảnh |
 | 0.40 | Dữ liệu đi qua sanitizer mà analyzer không chứng minh được là đủ |
 
-## 8. Whitelist
+## 9. Whitelist
 
 > **Whitelist chỉ ẩn (suppress) cảnh báo, KHÔNG làm cho mã nguồn trở nên an toàn.**
 > Finding bị ẩn vẫn được đếm và liệt kê trong mục *Suppressed* của report.
 
-Comment trong code (cùng dòng, hoặc dòng ngay phía trên):
+Comment trong code (cùng dòng, hoặc dòng ngay phía trên). Ví dụ thật trong
+`Mau_Demo/Mau2_QuanLyTep/python/demo_ast_taint.py`: script dòng lệnh mở tệp do chính người chạy chọn,
+nên cảnh báo Path Traversal được chủ động bỏ qua sau khi review:
 
 ```python
-# analyzer-ignore: PY001
-result = eval(expression)
-
-os.system(cmd)  # analyzer-ignore: PY003, PY004
+with open(path, encoding="utf-8") as handle:  # analyzer-ignore: PY014
+    return ast.parse(handle.read(), filename=path)
 ```
+
+```text
+$ python main.py scan Mau_Demo/Mau2_QuanLyTep/python/demo_ast_taint.py
+...
+Total findings: 0
+Suppressed:     1 (whitelist / analyzer-ignore; not verified safe)
+```
+
+Java/C# dùng comment `//` hoặc `/* */`:
 
 ```java
 Runtime.getRuntime().exec(cmd); // analyzer-ignore: JV001
@@ -310,7 +501,7 @@ File `whitelist.json` (của dự án được scan):
 - `disabled_rules`: tắt rule.
 - `allowed_secrets`: regex các giá trị không phải secret thật (dành cho PY007).
 
-## 9. Blacklist
+## 10. Blacklist
 
 `blacklist.json` cho phép khai báo hàm/module nguy hiểm **không cần sửa code** (rule PY012/PY013).
 Mỗi mục là tên (dạng ngắn như đề bài) hoặc object có `severity`, `cwe`, `reason`:
@@ -328,10 +519,10 @@ Mỗi mục là tên (dạng ngắn như đề bài) hoặc object có `severity
 Khi rule chuyên biệt (vd PY001 cho `eval`) đã báo cùng vị trí, finding chung của PY012 bị bỏ để tránh
 trùng lặp. Nếu tắt PY001, PY012 vẫn đảm bảo `eval` được báo.
 
-## 10. Taint analysis
+## 11. Taint analysis
 
-Sources và sanitizers khai báo trong `app/config/taint.json` (Python), `taint_java.json` và
-`taint_csharp.json`. Ví dụ với Python:
+Sources và sanitizers khai báo trong `app/config/taint.json` (Python), `taint_java.json`,
+`taint_csharp.json` và `taint_php.json`. Ví dụ với Python:
 
 ```json
 {
@@ -355,32 +546,41 @@ Sinks là argument nguy hiểm của các rule PY001–PY005, PY011 và PY014–
 - **STATIC** — cố định trong code (`cmd = "ls"; os.system(cmd)` → LOW);
 - **UNKNOWN** — tham số hàm, kết quả lời gọi hàm bất kỳ.
 
-Ví dụ:
+Ví dụ từ `Mau_Demo/Mau2_QuanLyTep/python/vulnerable/app.py`:
 
 ```python
-command = input("Command: ")
-os.system(command)
+@app.route("/info")
+def file_info():
+    name = request.args.get("name", "")                    # SOURCE: request.args
+    path = os.path.join(STORAGE_DIR, name)                 # name -> path
+    listing = "dir " if os.name == "nt" else "ls -l "
+    command = listing + '"' + path + '"'                   # path -> command
+    result = subprocess.run(command, shell=True, ...)      # SINK
 ```
 
 ```text
-[CRITICAL] PY003 app.py:2:0 - Untrusted input from input() reaches os.system().
-    Source: input()  Sink: os.system()
-    Taint path: input() -> command -> os.system()
+[CRITICAL] PY004 Mau_Demo/Mau2_QuanLyTep/python/vulnerable/app.py:66:13 - Untrusted input from request.args reaches subprocess.run() through the shell. (CWE-78, confidence 95%)
+    Source: request.args  Sink: subprocess.run()
+    Taint path: request.args -> name -> path -> command -> subprocess.run()
 ```
 
 Với Java/C#, source gồm lời gọi (`request.getParameter()`, `Console.ReadLine()`, `System.getenv()`),
 thành viên (`Request.Query`, `Request.Form`), **tham số có annotation/attribute** (`@RequestParam`,
 `@PathVariable`, `[FromQuery]`, `[FromBody]`...) và `args` của `main`. Sanitizer mặc định:
-`Integer.parseInt`, `int.Parse`, `Guid.Parse`...
+`Integer.parseInt`, `int.Parse`, `Guid.Parse`... Cùng luồng dữ liệu ở bản C# và Java của Mẫu 2:
+
+```text
+[CRITICAL] CS001 Mau_Demo/Mau2_QuanLyTep/csharp/vulnerable/Controllers/FileController.cs:72:18 - Untrusted input from [FromQuery] reaches ProcessStartInfo. (CWE-78, confidence 95%)
+    Source: [FromQuery]  Sink: ProcessStartInfo
+    Taint path: [FromQuery] -> name -> path -> arguments -> ProcessStartInfo
+
+[CRITICAL] JV001 Mau_Demo/Mau2_QuanLyTep/java/vulnerable/src/main/java/demo/filemanager/FileController.java:88:26 - Untrusted input from @RequestParam reaches ProcessBuilder. (CWE-78, confidence 95%)
+    Source: @RequestParam  Sink: ProcessBuilder
+    Taint path: @RequestParam -> name -> path -> command -> ProcessBuilder
+```
 
 Với PHP, source là `$_GET`, `$_POST`, `$_REQUEST`, `$_COOKIE`, `$_FILES`, `$_SERVER` (`app/config/taint_php.json`).
 Sanitizer: `intval`, `(int)`, `htmlspecialchars`, `mysqli_real_escape_string`, `escapeshellarg`, `basename`...
-
-```text
-[CRITICAL] CS001 AccountController.cs:27:8 - Untrusted input from [FromQuery] reaches Process.Start().
-    Source: [FromQuery]  Sink: Process.Start()
-    Taint path: [FromQuery] -> host -> Process.Start()
-```
 
 Taint được lan truyền qua nối chuỗi, f-string / `$"..."`, `%`, `.format()` / `String.format`, method call (`.strip()`, `.get()`),
 list/dict, comprehension, `for`, `with`, unpack tuple, `+=`, `self.x`. Phép gán trong nhánh
@@ -391,14 +591,15 @@ list/dict, comprehension, `for`, `with`, unpack tuple, `+=`, `self.x`. Phép gá
 phù hợp với sink (vd `shlex.quote` không chống được SQL injection).
 
 **Sanitizer theo loại sink** (`sink_sanitizers`): hàm chỉ làm sạch dữ liệu cho một loại sink. Ví dụ
-`os.path.basename(input())` an toàn cho `open()` (PY014 không báo) nhưng `os.system("cat " + name)` vẫn là
-CRITICAL (PY003). Khi ghép nhiều phần, kết quả chỉ an toàn nếu mọi phần tainted đều an toàn.
+`secure_filename(name)` trong bản `fixed` của Mẫu 2 làm `open()` / `send_file()` không còn bị báo (PY014),
+nhưng nếu cùng biến đó được ghép vào `os.system("cat " + name)` thì vẫn là CRITICAL (PY003).
+Khi ghép nhiều phần, kết quả chỉ an toàn nếu mọi phần tainted đều an toàn.
 `html.escape` không được chấp nhận cho template source (PY018), vì `{{ 7*7 }}` không chứa ký tự HTML.
 
-## 11. Testing
+## 12. Testing
 
 ```powershell
-python -m pytest -q                     # toàn bộ 717 test
+python -m pytest -q                     # toàn bộ test
 python -m pytest tests/test_taint.py -v # một nhóm
 ```
 
@@ -411,49 +612,57 @@ python -m pytest tests/test_taint.py -v # một nhóm
 | Core | `test_parser.py`, `test_utils.py`, `test_registry.py`, `test_engine.py`, `test_models.py` |
 | CLI / Report / Web | `test_cli.py`, `test_reports.py`, `test_web.py` |
 | Fixture & sample | `test_fixtures.py` (so khớp chính xác marker `# expect: PYxxx` trong `tests/vulnerable/`), `test_samples.py` |
+| Hồi quy tính năng (liên hàm, sanitizer, CSRF, SARIF) | `test_feature_regressions.py` |
 
-File tạm của test nằm trong `.tmp/` của project (không dùng thư mục temp của hệ thống).
+File tạm của test được tạo tự động trong `.tmp/pytest` của project (không dùng thư mục temp của hệ thống,
+không nằm trong repository).
 
-## 12. Ví dụ output
+## 13. CI/CD với SARIF
 
-```text
-$ python main.py scan samples/vulnerable/sql_vulnerable.py
-Secure Code Analyzer v1.1
+`python main.py scan app --format sarif -o results.sarif --fail-on CRITICAL`
+xuất báo cáo cho mã ứng dụng. Workflow mẫu chỉ scan `app` để không đưa các mẫu cố ý
+có lỗ hổng trong `Mau_Demo`, `tests` và `samples` vào kết quả CI.
 
-Scanning: samples/vulnerable/sql_vulnerable.py
+Workflow lưu mã thoát, tải SARIF nếu báo cáo tồn tại, rồi trả lại mã thoát của
+analyzer: 0 = thành công dưới ngưỡng, 1 = có finding đạt ngưỡng, 2 = lỗi cấu hình,
+đầu vào hoặc lỗi phân tích file. Lỗi phân tích cũng được ghi vào
+`invocations[].executionSuccessful` và thông báo trong SARIF.
 
-Files scanned: 1
-Lines scanned: 28
+Đường dẫn được mã hóa URI, relative path có base URI, rule tùy chỉnh có descriptor.
+Taint path hiện chỉ lưu tên bước, chưa lưu tọa độ từng bước; SARIF chỉ gắn tọa độ
+thật cho sink. Việc upload vẫn cần quyền GitHub Code Scanning phù hợp với repository.
+Tham khảo [SARIF support của GitHub](https://docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support).
 
-CRITICAL: 1
-HIGH:     1
-MEDIUM:   0
-LOW:      0
-INFO:     0
+### Repository chưa bật Code Scanning
 
-Total findings: 2
+Workflow luôn lưu `results.sarif` vào artifact **security-scan-sarif** (giữ 14 ngày).
+Mở **Actions → lần chạy → Artifacts** để tải báo cáo, không cần bật Code Scanning.
+Bước kiểm tra mã thoát vẫn làm CI thất bại khi có finding CRITICAL hoặc lỗi scan;
+không bỏ qua các lỗi này để làm checks xanh.
 
-Findings:
-  [CRITICAL] PY011 samples/vulnerable/sql_vulnerable.py:22:4 - Untrusted input from request.args is used to build the SQL query passed to cursor.execute(). (CWE-89, confidence 95%)
-      cursor.execute(query)  # PY011: SQL injection (tainted)
-      Source: request.args  Sink: cursor.execute()
-      Taint path: request.args -> user_id -> query -> cursor.execute()
-  [HIGH] PY011 samples/vulnerable/sql_vulnerable.py:27:4 - SQL query built from dynamic values is passed to cursor.execute(). (CWE-89, confidence 85%)
-      cursor.execute(f"SELECT * FROM products WHERE name LIKE '%{keyword}%'")  # PY011
-```
+Upload vào tab **Security / Code scanning** là tích hợp tùy chọn:
 
-Khi file không parse được:
+1. Bật tính năng Code Scanning/GitHub Code Security phù hợp với repository trong
+   **Settings → Advanced Security**. Repository private/internal cần quyền sử dụng
+   tính năng tương ứng; chỉ thêm quyền vào workflow không thay thế việc bật tính năng.
+2. Vào **Settings → Secrets and variables → Actions → Variables**, tạo repository
+   variable `CODE_SCANNING_ENABLED` với giá trị `true`.
+3. Push thay đổi workflow hoặc chạy lại workflow trên phiên bản đã cập nhật.
 
-```text
-Errors (1):
-  bad.py:12 - SyntaxError: Python SyntaxError: invalid syntax
-```
+Workflow dùng `github/codeql-action/upload-sarif@v4`, giữ quyền
+`security-events: write`, và bỏ qua upload Code Scanning đối với PR từ fork.
+Khi đã bật variable, lỗi upload vẫn được báo là lỗi CI để phát hiện cấu hình sai.
+Nếu variable chưa đặt hoặc khác `true`, workflow chỉ lưu artifact và ghi rõ lý do
+trong phần summary. Cảnh báo deprecation v3 không phải nguyên nhân của lỗi
+`Code scanning is not enabled for this repository`.
 
-Các file trong `samples/vulnerable/` **cố ý chứa lỗ hổng**, chỉ để kiểm thử cục bộ; không chạy và không
-triển khai chúng. Mọi secret trong đó là giá trị giả.
+Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/integrate-with-existing-tools/upload-sarif-file).
 
-## 13. Hạn chế
+## 14. Hạn chế
 
+- **Chưa có rule Path Traversal cho Java và C#** (chỉ có PY014 cho Python, PH005 cho PHP). Ví dụ trong
+  Mẫu 2: `File.ReadAllText(Path.Combine(dir, name))` (C#) và `Files.readString(dir.resolve(name))` (Java)
+  vẫn khai thác được bằng `../secret/config.txt` nhưng không bị báo (false negative).
 - **Phân tích liên hàm xuyên file/module**: Đã hỗ trợ phân tích liên hàm (inter-procedural) trong cùng một file/class (lan truyền taint qua tham số hàm gọi và giá trị trả về của hàm helper); tuy nhiên chưa phân tích đồ thị gọi (call graph) xuyên qua nhiều file/module khác nhau.
 - Nhánh điều kiện được hợp nhất bảo thủ; không phân tích đường đi (path-sensitive).
 - Container được theo dõi như một khối (`d["a"] = tainted` → cả `d` bị taint).
@@ -469,23 +678,25 @@ triển khai chúng. Mọi secret trong đó là giá trị giả.
   kiểu của biến được suy từ khai báo và `new T()`, nên đối tượng truyền qua nhiều lớp có thể bị bỏ sót.
   Không phân tích lambda, generic phức tạp, LINQ, annotation cấu hình (Spring Security...).
 - Java/C#/PHP yêu cầu UTF-8; file có lỗi cú pháp không được phân tích (báo *Scan failed*).
-- PHP: không theo dõi dữ liệu qua `include` giữa các file (vd DVWA gán `$file = $_GET['page']` ở `low.php`
+- PHP: không theo dõi dữ liệu qua `include` giữa các file (vd gán `$file = $_GET['page']` ở `page.php`
   rồi `include($file)` ở `index.php`: chỉ báo MEDIUM), không theo dõi `$_SESSION` và dữ liệu đọc từ database
   (stored XSS), không phân tích JavaScript trong trang.
 - Bootstrap/Chart.js tải từ CDN (cần Internet khi mở trang).
 - Static analysis có thể có false positive và false negative — mọi finding cần được review.
 
-## 14. Hướng phát triển
+## 15. Hướng phát triển
 
+- Thêm rule Path Traversal cho Java/C# (`File.ReadAllText`, `PhysicalFile`, `Files.readString`,
+  `FileSystemResource`...) với sanitizer `Path.GetFileName` / `File.getName` — đúng trường hợp Mẫu 2 đang bỏ sót.
 - Phân tích liên hàm xuyên các module và package lớn (inter-module call graph), phân tích path-sensitive.
-- Thêm ngôn ngữ khác qua tree-sitter (JavaScript/TypeScript, PHP, Go): chỉ cần một adapter và bộ rule mới.
+- Thêm ngôn ngữ khác qua tree-sitter (JavaScript/TypeScript, Go): chỉ cần một adapter và bộ rule mới.
 - Phân giải kiểu Java/C# đầy đủ hơn (đọc `import`/`using`, kiểu trả về của method).
 - Thêm rule: JWT không verify, `assert` dùng cho kiểm tra bảo mật, zip slip (`extractall`), open redirect;
   quét file template Jinja2/Django (`|safe`, `autoescape false`).
 - Lưu lịch sử scan bằng SQLite + SQLAlchemy, so sánh giữa các lần scan.
 - Xuất PDF; tự host Bootstrap/Chart.js kèm Subresource Integrity để chạy offline.
 
-## 15. Phạm vi và vận hành các tính năng bổ sung
+## 16. Ghi chú kỹ thuật
 
 ### Phân tích liên hàm
 
@@ -504,7 +715,7 @@ dùng chung một return summary. Nhãn tại sink được gộp bảo thủ t�
   closure thoát khỏi scope hoặc phân giải overload có cùng số tham số.
   C# optional arguments và Java varargs chưa được phân giải đầy đủ.
 
-### Sanitizer theo loại sink
+### Sanitizer theo loại sink cho Java/C#
 
 Cấu hình Java/C# dùng `sink_sanitizers` tương tự Python. Chỉ danh mục đúng với
 sink mới được dùng để giảm mức cảnh báo; SQL và command vẫn giữ finding LOW
@@ -530,46 +741,5 @@ truy cập HTTPS. Origin/Referer khác nguồn hoặc Fetch Metadata cross-site 
 
 Nếu chạy nhiều worker, đặt cùng `ANALYZER_CSRF_SECRET` ngẫu nhiên, dài ít nhất
 32 byte, cho mọi worker. Nếu không cấu hình, mỗi app có secret ngẫu nhiên riêng;
-sau khi khởi động lại cần tải lại form. Authentication nằm ngoài phạm vi đợt sửa này.
+sau khi khởi động lại cần tải lại form.
 Tham khảo [hướng dẫn CSRF của OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html).
-
-### SARIF và CI
-
-`python main.py scan app --format sarif -o results.sarif --fail-on CRITICAL`
-xuất báo cáo cho mã ứng dụng. Workflow mẫu scan `app` để không đưa các mẫu cố ý
-có lỗ hổng trong `tests` và `samples` vào kết quả CI.
-
-Workflow lưu mã thoát, tải SARIF nếu báo cáo tồn tại, rồi trả lại mã thoát của
-analyzer: 0 = thành công dưới ngưỡng, 1 = có finding đạt ngưỡng, 2 = lỗi cấu hình,
-đầu vào hoặc lỗi phân tích file. Lỗi phân tích cũng được ghi vào
-`invocations[].executionSuccessful` và thông báo trong SARIF.
-
-Đường dẫn được mã hóa URI, relative path có base URI, rule tùy chỉnh có descriptor.
-Taint path hiện chỉ lưu tên bước, chưa lưu tọa độ từng bước; SARIF chỉ gắn tọa độ
-thật cho sink. Việc upload vẫn cần quyền GitHub Code Scanning phù hợp với repository.
-Tham khảo [SARIF support của GitHub](https://docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support).
-
-#### Repository chưa bật Code Scanning
-
-Workflow luôn lưu `results.sarif` vào artifact **security-scan-sarif** (giữ 14 ngày).
-Mở **Actions → lần chạy → Artifacts** để tải báo cáo, không cần bật Code Scanning.
-Bước kiểm tra mã thoát vẫn làm CI thất bại khi có finding CRITICAL hoặc lỗi scan;
-không bỏ qua các lỗi này để làm checks xanh.
-
-Upload vào tab **Security / Code scanning** là tích hợp tùy chọn:
-
-1. Bật tính năng Code Scanning/GitHub Code Security phù hợp với repository trong
-   **Settings → Advanced Security**. Repository private/internal cần quyền sử dụng
-   tính năng tương ứng; chỉ thêm quyền vào workflow không thay thế việc bật tính năng.
-2. Vào **Settings → Secrets and variables → Actions → Variables**, tạo repository
-   variable `CODE_SCANNING_ENABLED` với giá trị `true`.
-3. Push thay đổi workflow hoặc chạy lại workflow trên phiên bản đã cập nhật.
-
-Workflow dùng `github/codeql-action/upload-sarif@v4`, giữ quyền
-`security-events: write`, và bỏ qua upload Code Scanning đối với PR từ fork.
-Khi đã bật variable, lỗi upload vẫn được báo là lỗi CI để phát hiện cấu hình sai.
-Nếu variable chưa đặt hoặc khác `true`, workflow chỉ lưu artifact và ghi rõ lý do
-trong phần summary. Cảnh báo deprecation v3 không phải nguyên nhân của lỗi
-`Code scanning is not enabled for this repository`.
-
-Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/integrate-with-existing-tools/upload-sarif-file).
