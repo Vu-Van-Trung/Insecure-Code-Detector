@@ -1,4 +1,4 @@
-"""Các khối dựng dùng chung cho rule Java (JVxxx) và C# (CSxxx).
+"""Các khối dựng dùng chung cho rule Java (JVxxx), C# (CSxxx) và PHP (PHxxx).
 
 Dấu gạch dưới ở đầu tên khiến registry không nạp module này như một module
 rule; các rule cụ thể nằm trong java_rules.py và csharp_rules.py và phần lớn
@@ -251,6 +251,145 @@ class SqlRuleBase(TSRule):
         type_name = ctx.type_of(receiver) or ""
         return any(word in self.db_words for word in words) or any(
             word in self.db_words for word in split_identifier(type_name))
+
+
+# --------------------------------------------------------------------------- open redirect
+
+
+class OpenRedirectRuleBase(TSRule):
+    """JV010 / CS010: untrusted redirect destinations in web response APIs."""
+
+    _abstract_rule = True
+    severity = Severity.HIGH
+    cwe = "CWE-601"
+    category = "Open Redirect"
+
+    def report_redirect(self, call: Any, ctx: TSContext) -> Finding | None:
+        """Report only destinations proven to originate from an untrusted source."""
+        if not call.args:
+            return None
+        destination = call.args[0]
+        kind, info = classify_argument(destination, ctx)
+        if info is None or "url" in info.safe_for:
+            return None
+        if kind is ArgumentKind.TAINTED:
+            return self.tainted_finding(
+                call.node, ctx, info, call.display,
+                f"Untrusted input from {info.source} controls the redirect destination passed to {call.display}.",
+                severity=Severity.HIGH,
+            )
+        if kind is ArgumentKind.SANITIZED:
+            return self.sanitized_finding(call.node, ctx, info, call.display)
+        return None
+
+
+# --------------------------------------------------------------------------- path traversal, XSS
+
+# Vị trí "argument" đặc biệt: chính đối tượng nhận là dữ liệu nguy hiểm, vd file.delete() với File file.
+RECEIVER = -1
+# Thẻ HTML trong phần chữ cố định của một chuỗi: "<td>", "</b>", "<!DOCTYPE".
+HTML_TAG = re.compile(r"<\s*/?\s*[a-zA-Z!]")
+
+
+def sink_values(call: Any, positions: Iterable[int]) -> list[Node]:
+    """Các node tại ``positions`` của lời gọi (RECEIVER = đối tượng nhận); vị trí không tồn tại bị bỏ qua."""
+    values = []
+    for position in positions:
+        if position == RECEIVER:
+            if call.receiver is not None:
+                values.append(call.receiver)
+        elif position < len(call.args):
+            values.append(call.args[position])
+    return values
+
+
+def match_sink(call: Any, table: dict[str, tuple[int, ...]]) -> tuple[int, ...] | None:
+    """Vị trí argument nguy hiểm nếu một tên của lời gọi (``Files.delete``, ``new FileInputStream``) có trong bảng."""
+    for name in sorted(call.names):
+        if name in table:
+            return table[name]
+    return None
+
+
+class TaintedSinkRuleBase(TSRule):
+    """Bản Java/C# của TaintedSinkRule (Python): sink chỉ nguy hiểm khi nhận dữ liệu không tin cậy.
+
+    Đường dẫn file hay chuỗi ghi vào response xuất hiện ở khắp nơi, nên chỉ luồng
+    đi từ một taint source mới được báo (JV011/CS011 path traversal, JV012/CS012 XSS).
+    Dữ liệu đã qua sanitizer của ``sanitizer_category`` (``sink_sanitizers`` trong
+    taint_<language>.json, vd ``FilenameUtils.getName`` cho "path",
+    ``HtmlUtils.htmlEscape`` cho "html") thì không bị báo; sanitizer chung
+    (``Integer.parseInt``...) cho finding LOW.
+    """
+
+    _abstract_rule = True
+    # Loại sink, khớp với khóa trong sink_sanitizers: "path" hoặc "html".
+    sanitizer_category: ClassVar[str]
+    # {source} và {sink} được thay bằng nguồn dữ liệu và tên sink.
+    tainted_message: ClassVar[str] = "Untrusted input from {source} reaches {sink}."
+
+    def grade_sink(self, node: Node, ctx: TSContext, values: Iterable[Node], sink: str,
+                   confidence: float | None = None, message: str | None = None) -> Finding | None:
+        """Một finding cho cả lời gọi: argument tainted được ưu tiên hơn argument đã qua sanitizer chung.
+
+        ``message`` thay cho ``tainted_message`` của rule (cùng các chỗ {source}, {sink}).
+        """
+        sanitized: TaintInfo | None = None
+        for value in values:
+            kind, info = classify_argument(value, ctx)
+            # Không taint (hằng số / không rõ nguồn) hoặc đã làm sạch đúng loại sink: bỏ qua.
+            if info is None or self.sanitizer_category in info.safe_for:
+                continue
+            if kind is ArgumentKind.TAINTED:
+                message = (message or self.tainted_message).format(source=info.source, sink=sink)
+                if confidence is None:
+                    return self.tainted_finding(node, ctx, info, sink, message)
+                return self.tainted_finding(node, ctx, info, sink, message, confidence=confidence)
+            sanitized = sanitized or info
+        return self.sanitized_finding(node, ctx, sanitized, sink) if sanitized is not None else None
+
+
+class PathTraversalRuleBase(TaintedSinkRuleBase):
+    """JV011 / CS011: thao tác file với đường dẫn lấy từ request.
+
+    Lớp con chỉ khai báo ``path_sinks``: tên lời gọi -> vị trí argument là đường
+    dẫn. Bản thân ``new File(x)`` / ``new FileInfo(x)`` không mở file nên không
+    phải sink; nhờ vậy ``new File(name).getName()`` (sanitizer) không bị báo.
+    """
+
+    _abstract_rule = True
+    name = "Path traversal"
+    description = (
+        "A file system path is built from untrusted input. Sequences such as ../ or an absolute path let an "
+        "attacker read, overwrite or delete files outside the intended directory."
+    )
+    severity = Severity.HIGH
+    cwe = "CWE-22"
+    category = "Path Traversal"
+    sanitizer_category = "path"
+    tainted_message = "Untrusted input from {source} is used as a file path in {sink}."
+    path_sinks: ClassVar[dict[str, tuple[int, ...]]] = {}
+
+    def check_file(self, ctx: TSContext) -> Iterator[Finding]:
+        for call in ctx.calls:
+            positions = match_sink(call, self.path_sinks)
+            if positions is None:
+                continue
+            finding = self.grade_sink(call.node, ctx, sink_values(call, positions), call.display)
+            if finding is not None:
+                yield finding
+
+
+def builds_html(ctx: TSContext, value: Node, at: Node) -> bool:
+    """True nếu phần chữ cố định của ``value`` chứa thẻ HTML (lần theo các phép gán nếu là biến)."""
+    value = ctx.adapter.unwrap(value)
+    parts = string_parts(ctx, value)
+    if value.type in ctx.adapter.identifier_types:
+        name = ctx.adapter.text(value)
+        initial = ctx.initializer_of(name, at)
+        values = ([initial] if initial is not None else []) + [v for _, v, _ in ctx.assignments_before(name, at)]
+        parts += [part for v in values for part in string_parts(ctx, v)]
+    return bool(HTML_TAG.search(" ".join(parts)))
 
 
 # --------------------------------------------------------------------------- deserialization, code injection

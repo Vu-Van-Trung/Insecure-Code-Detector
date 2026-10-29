@@ -1,4 +1,4 @@
-// Intentionally vulnerable test fixture: Java rules JV001 - JV009. Never compile or run this file.
+// Intentionally vulnerable test fixture: Java rules JV001 - JV012. Never compile or run this file.
 import java.io.ObjectInputStream;
 import java.security.MessageDigest;
 import java.sql.Connection;
@@ -38,5 +38,20 @@ public class UserService {
 
     public void connect(javax.net.ssl.HttpsURLConnection connection) {
         connection.setHostnameVerifier((hostname, session) -> true); // expect: JV009
+    }
+
+    public void download(HttpServletRequest request, javax.servlet.http.HttpServletResponse response) throws Exception {
+        String name = request.getParameter("file");
+        byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/srv/files", name)); // expect: JV011
+        java.io.File upload = new java.io.File("/srv/uploads", name);
+        upload.delete(); // expect: JV011
+
+        String query = request.getParameter("q");
+        response.getWriter().println("<p>Results for " + query + "</p>"); // expect: JV012
+    }
+
+    @GetMapping("/hello")
+    public String hello(@RequestParam("name") String name) {
+        return "<h1>Hello " + name + "</h1>"; // expect: JV012
     }
 }

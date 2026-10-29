@@ -165,7 +165,14 @@ class TSContext:
                 return self.adapter.text(receiver)
             return None
         if node.type in self.adapter.member_types:
-            return simple_type(text) if text[:1].isupper() else None
+            if text[:1].isupper():
+                return simple_type(text)  # System.IO.File -> File
+            # Tên class viết đầy đủ package của Java: java.nio.file.Files -> Files.
+            # Package viết thường, class viết hoa (chỉ Java: property C# cũng viết hoa, vd client.Http).
+            parts = normalize(text).split(".")
+            if self.language == "java" and parts[0] not in {"this", "super"} and parts[-1][:1].isupper() \
+                    and all(part.isidentifier() and part[:1].islower() for part in parts[:-1]):
+                return parts[-1]
         return None
 
     def get_line(self, lineno: int) -> str:

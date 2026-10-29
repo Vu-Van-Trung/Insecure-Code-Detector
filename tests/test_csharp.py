@@ -1,4 +1,4 @@
-"""C# rules CS001 - CS009 and C# taint tracking (tree-sitter)."""
+"""C# rules CS001 - CS012 and C# taint tracking (tree-sitter)."""
 
 import textwrap
 
@@ -239,3 +239,142 @@ def test_inter_procedural_call_in_csharp(cs):
     assert len(findings) == 1
     assert findings[0].severity is Severity.CRITICAL
     assert findings[0].source == "Console.ReadLine()"
+
+
+# ---------------------------------------------------------------- CS010 open redirect
+
+
+def test_open_redirect_from_request_query(cs):
+    [finding] = cs('Response.Redirect(Request.Query["next"]);', "CS010")
+    assert finding.cwe == "CWE-601"
+    assert finding.severity is Severity.HIGH
+    assert finding.source == "Request.Query"
+    assert finding.sink == "Response.Redirect()"
+
+
+def test_mvc_redirect_tracks_assigned_query_value(cs):
+    findings = cs('var target = Request.Query["next"];\nRedirect(target);', "CS010")
+    assert len(findings) == 1 and findings[0].line == 4
+
+
+def test_local_redirect_and_fixed_target_are_not_reported(cs):
+    assert cs('LocalRedirect(Request.Query["next"]);', "CS010") == []
+    assert cs('Response.Redirect("/dashboard");', "CS010") == []
+
+
+def test_redirect_inside_positive_local_url_guard_is_not_reported(cs):
+    code = '''
+    class Demo : Controller {
+        IActionResult Go() {
+            var destination = Request.Query["next"];
+            if (Url.IsLocalUrl(destination)) {
+                return Redirect(destination);
+            }
+            return BadRequest();
+        }
+    }
+    '''
+    assert cs(code, "CS010", wrap=False) == []
+
+
+def test_redirect_after_early_rejection_of_nonlocal_url_is_not_reported(cs):
+    code = '''
+    class Demo : Controller {
+        IActionResult Go() {
+            var destination = Request.Query["next"];
+            if (!Url.IsLocalUrl(destination)) return BadRequest();
+            return Redirect(destination);
+        }
+    }
+    '''
+    assert cs(code, "CS010", wrap=False) == []
+
+
+def test_local_url_check_for_a_different_value_does_not_suppress(cs):
+    code = '''
+    if (Url.IsLocalUrl("/dashboard")) {
+        Response.Redirect(Request.Query["next"]);
+    }
+    '''
+    assert cs(code, "CS010")
+
+
+# ---------------------------------------------------------------- CS011 path traversal
+
+
+@pytest.mark.parametrize(
+    "code, sink",
+    [
+        ('System.IO.File.ReadAllText(Path.Combine("/data", Request.Query["f"]));', "File.ReadAllText()"),
+        ('var p = "/data/" + Request.Query["f"];\nFile.Delete(p);', "File.Delete()"),
+        ('using var s = new FileStream(Request.Query["f"], FileMode.Open);', "new FileStream()"),
+        ('var fi = new FileInfo(Request.Form["f"]);\nfi.Delete();', "FileInfo.Delete()"),
+        ('File.Copy("/tmp/a", Request.Query["dst"]);', "File.Copy()"),
+    ],
+)
+def test_path_traversal_from_request(cs, code, sink):
+    [finding] = cs(code, "CS011")
+    assert (finding.severity, finding.cwe) == (Severity.HIGH, "CWE-22")
+    assert finding.sink == sink
+
+
+def test_physical_file_with_route_parameter(cs):
+    code = ('class C : Controller { IActionResult D([FromRoute] string name) '
+            '{ return PhysicalFile("/files/" + name, "application/pdf"); } }')
+    [finding] = cs(code, "CS011", wrap=False)
+    assert finding.source == "[FromRoute]"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'File.ReadAllText(Path.Combine("/data", Path.GetFileName(Request.Query["f"])));',
+        'File.ReadAllText("/data/" + param);',                 # origin unknown
+        'var r = new StreamReader(Request.Body);',             # a stream, not a path
+        'var fi = new FileInfo(Request.Query["f"]);\nvar n = fi.Name;',
+        'File.ReadAllText("/data/settings.json");',
+    ],
+)
+def test_path_traversal_safe(cs, code):
+    assert cs(code, "CS011") == []
+
+
+# ---------------------------------------------------------------- CS012 XSS
+
+
+@pytest.mark.parametrize(
+    "code, sink",
+    [
+        ('Response.Write("<b>" + Request.Query["q"] + "</b>");', "Response.Write()"),
+        ('HttpContext.Response.WriteAsync(Request.Query["q"]);', "Response.WriteAsync()"),
+        ('var h = new HtmlString(Request.Query["q"]);', "new HtmlString()"),
+        ('var h = MvcHtmlString.Create(Request.Form["bio"]);', "MvcHtmlString.Create()"),
+        ('return Content("<p>" + Request.Query["q"] + "</p>", "text/html");', "Content()"),
+        ('return new ContentResult { Content = Request.Query["q"], ContentType = "text/html" };', "new ContentResult()"),
+    ],
+)
+def test_xss_from_request(cs, code, sink):
+    [finding] = cs(code, "CS012")
+    assert (finding.severity, finding.cwe) == (Severity.HIGH, "CWE-79")
+    assert finding.sink == sink
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'Response.Write(WebUtility.HtmlEncode(Request.Query["q"]));',
+        'Response.Write(HtmlEncoder.Default.Encode(Request.Query["q"]));',
+        'return Content(Request.Query["q"]);',                                    # text/plain
+        'return Content(Request.Query["q"], "application/json");',
+        'Response.Write(param);',                                                 # origin unknown
+        'writer.Write(Request.Query["q"]);',                                      # not the HTTP response
+    ],
+)
+def test_xss_safe(cs, code):
+    assert cs(code, "CS012") == []
+
+
+def test_html_encoding_does_not_clean_file_paths(cs):
+    code = 'var name = WebUtility.HtmlEncode(Request.Query["f"]);\nFile.ReadAllText("/data/" + name);'
+    assert cs(code, "CS012") == []
+    assert cs(code, "CS011")

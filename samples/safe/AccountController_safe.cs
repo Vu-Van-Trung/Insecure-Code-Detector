@@ -41,4 +41,17 @@ public class AccountController : Controller
     {
         return Rfc2898DeriveBytes.Pbkdf2(password, salt, 600_000, HashAlgorithmName.SHA256, 32);
     }
+
+    [HttpGet("files")]
+    public IActionResult Download([FromQuery] string name)
+    {
+        // Path.GetFileName keeps only the file name: "../../web.config" -> "web.config".
+        return PhysicalFile(Path.Combine("/srv/files", Path.GetFileName(name)), "application/octet-stream");
+    }
+
+    [HttpGet("hello")]
+    public IActionResult Hello([FromQuery] string name)
+    {
+        return Content("<h1>Hello " + WebUtility.HtmlEncode(name) + "</h1>", "text/html");
+    }
 }

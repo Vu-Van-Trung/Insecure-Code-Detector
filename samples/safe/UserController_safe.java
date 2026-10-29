@@ -32,4 +32,16 @@ public class UserController {
         SecureRandom random = new SecureRandom();
         return Long.toHexString(random.nextLong());
     }
+
+    @GetMapping("/files")
+    public byte[] download(@RequestParam("name") String name) throws Exception {
+        // FilenameUtils.getName keeps only the file name: "../../etc/passwd" -> "passwd".
+        String fileName = org.apache.commons.io.FilenameUtils.getName(name);
+        return java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/srv/files", fileName));
+    }
+
+    @GetMapping("/hello")
+    public String hello(@RequestParam("name") String name) {
+        return "<h1>Hello " + org.springframework.web.util.HtmlUtils.htmlEscape(name) + "</h1>";
+    }
 }

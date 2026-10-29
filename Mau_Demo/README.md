@@ -47,8 +47,8 @@ Kết quả đã kiểm tra (12 dự án):
 | Mẫu 1 | C# | 5 (2 CRITICAL, 2 HIGH, 1 MEDIUM) | 0 |
 | Mẫu 1 | Java | 5 (2 CRITICAL, 2 HIGH, 1 MEDIUM) | 0 |
 | Mẫu 2 | Python | 3 (1 CRITICAL, 2 HIGH) | 0 |
-| Mẫu 2 | C# | 1 (1 CRITICAL) — xem lưu ý | 0 |
-| Mẫu 2 | Java | 1 (1 CRITICAL) — xem lưu ý | 0 |
+| Mẫu 2 | C# | 3 (1 CRITICAL, 2 HIGH) | 0 |
+| Mẫu 2 | Java | 3 (1 CRITICAL, 2 HIGH) | 0 |
 
 ### Mẫu 1 — chi tiết phát hiện
 
@@ -63,11 +63,11 @@ Kết quả đã kiểm tra (12 dự án):
 
 | Lỗ hổng | Python | C# | Java |
 |---|---|---|---|
-| Path Traversal — xem tệp (CWE-22) | PY014 `request.args -> name -> path -> open()` | *không báo* | *không báo* |
-| Path Traversal — tải tệp (CWE-22) | PY014 `request.args -> name -> flask.send_file()` | *không báo* | *không báo* |
+| Path Traversal — xem tệp (CWE-22) | PY014 `request.args -> name -> path -> open()` | CS011 `[FromQuery] -> name -> path -> File.ReadAllText()` | JV011 `@RequestParam -> name -> path -> Files.readString()` |
+| Path Traversal — tải tệp (CWE-22) | PY014 `request.args -> name -> flask.send_file()` | CS011 `[FromQuery] -> name -> path -> PhysicalFile()` | JV011 `@RequestParam -> name -> path -> new FileSystemResource()` |
 | Command Injection (CWE-78) | PY004 `request.args -> name -> path -> command -> subprocess.run()` | CS001 `[FromQuery] -> name -> path -> arguments -> ProcessStartInfo` | JV001 `@RequestParam -> name -> path -> command -> ProcessBuilder` |
 
-> **Lưu ý:** công cụ hiện **chưa có luật Path Traversal cho C# và Java** (chỉ có PY014 cho Python, PH005 cho PHP). Lỗi Path Traversal ở bản C#/Java vẫn khai thác được nhưng không bị báo (false negative). Có thể dùng điểm này khi trình bày *hạn chế / hướng phát triển*: thêm luật CS/JV cho `File.ReadAllText`, `PhysicalFile`, `Files.readString`, `FileSystemResource`... với sanitizer `Path.GetFileName` / `File.getName`.
+> **Lưu ý:** bản `fixed` của C#/Java không bị báo Path Traversal vì tên tệp đi qua `Path.GetFileName` / `new File(name).getName()` (sanitizer loại `path`). Riêng kiểm tra `GetFullPath(...).StartsWith(dir)` / `normalize().startsWith(dir)` không được công cụ nhận diện là sanitizer; ở đây nó chỉ là lớp bảo vệ thứ hai.
 
 ---
 

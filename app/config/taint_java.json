@@ -20,7 +20,9 @@
             "BufferedReader.readLine",
             "Console.readLine",
             "System.getenv",
-            "System.getProperty"
+            "System.getProperty",
+            "MultipartFile.getOriginalFilename",
+            "Part.getSubmittedFileName"
         ],
         "members": [],
         "parameter_annotations": [
@@ -32,7 +34,8 @@
             "QueryParam",
             "PathParam",
             "FormParam",
-            "HeaderParam"
+            "HeaderParam",
+            "RequestPart"
         ],
         "main_args": true
     },
@@ -46,13 +49,18 @@
     "sink_sanitizers": {
         "path": [
             "FilenameUtils.getName",
-            "File.getName"
+            "File.getName",
+            "FilenameUtils.getBaseName",
+            "Path.getFileName"
         ],
         "html": [
             "HtmlUtils.htmlEscape",
             "StringEscapeUtils.escapeHtml4",
             "Encode.forHtml",
-            "Encode.forHtmlAttribute"
+            "Encode.forHtmlAttribute",
+            "Encode.forHtmlContent",
+            "StringEscapeUtils.escapeHtml",
+            "ESAPI.encoder().encodeForHTML"
         ],
         "url": [],
         "sql": [

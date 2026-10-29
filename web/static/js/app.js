@@ -42,6 +42,12 @@
       history_failed: "Could not load scan details. Please try again.", history_loading: "Loading scan details…",
       malware_message_0: "Looking for malware…", malware_message_1: "Checking for insecure code…", malware_message_2: "Analyzing severity…",
       malware_message_3: "Putting the results together…", malware_message_4: "Almost done…",
+      redirect_explanation_title: "Why this was flagged",
+      redirect_explanation_body: "A request value can be changed by a visitor. If it reaches a redirect destination without an allow-list check, the application may send the visitor to a phishing site.",
+      redirect_example_label: "Example request",
+      redirect_safer_title: "Safer handling",
+      redirect_safer_csharp: "Use LocalRedirect for local paths, or check Url.IsLocalUrl in the branch that performs Redirect. For external destinations, allow only explicitly trusted hosts.",
+      redirect_safer_java: "Map a return option to a fixed local route. If external redirects are required, validate the host against an explicit allow-list before calling sendRedirect.",
     },
     vi: {
       language: "Ngôn ngữ", tagline: "v1.1 · chỉ phân tích tĩnh – mã tải lên không bao giờ được thực thi",
@@ -76,6 +82,12 @@
       history_failed: "Không thể tải chi tiết lần quét. Vui lòng thử lại.", history_loading: "Đang tải chi tiết lần quét…",
       malware_message_0: "Đang tìm mã độc…", malware_message_1: "Đang xem thử có mã nguồn không an toàn nào không…", malware_message_2: "Đang phân tích mức độ nghiêm trọng…",
       malware_message_3: "Đang tổng hợp thông tin…", malware_message_4: "Sắp xong rùi…",
+      redirect_explanation_title: "Vì sao bị cảnh báo?",
+      redirect_explanation_body: "Người dùng có thể thay đổi giá trị trong request. Nếu giá trị đó đi thẳng vào đích chuyển hướng mà không được kiểm tra theo danh sách cho phép, ứng dụng có thể đưa họ tới trang giả mạo.",
+      redirect_example_label: "Ví dụ request",
+      redirect_safer_title: "Cách xử lý an toàn hơn",
+      redirect_safer_csharp: "Dùng LocalRedirect cho đường dẫn nội bộ, hoặc chỉ gọi Redirect trong nhánh đã kiểm tra Url.IsLocalUrl. Với đích bên ngoài, chỉ cho phép các máy chủ được tin cậy rõ ràng.",
+      redirect_safer_java: "Ánh xạ lựa chọn quay lại thành một route nội bộ cố định. Nếu cần chuyển hướng ra ngoài, hãy kiểm tra máy chủ theo danh sách cho phép trước khi gọi sendRedirect.",
     },
   };
 

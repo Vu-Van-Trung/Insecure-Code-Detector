@@ -42,4 +42,14 @@ public class UserController {
         Random random = new Random();
         return Long.toHexString(random.nextLong());                      // JV007
     }
+
+    @GetMapping("/files")
+    public byte[] download(@RequestParam("name") String name) throws Exception {
+        return java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/srv/files", name)); // JV011 (tainted)
+    }
+
+    @GetMapping("/hello")
+    public String hello(@RequestParam("name") String name) {
+        return "<h1>Hello " + name + "</h1>";                            // JV012 (tainted)
+    }
 }

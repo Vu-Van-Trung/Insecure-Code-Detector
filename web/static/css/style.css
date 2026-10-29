@@ -162,3 +162,7 @@ body { background: #f5f6f8; }
 .taint-path li:not(:last-child)::after { content: "\2193"; position: absolute; left: 1rem; bottom: -1.15rem; color: #6c757d; }
 .taint-path li.source { border-color: var(--sev-high); }
 .taint-path li.sink { border-color: var(--sev-critical); }
+
+.redirect-explanation { padding: 1rem; border: 1px solid #b6d4fe; border-radius: .5rem; background: #f0f7ff; }
+.redirect-example { display: grid; gap: .25rem; padding: .65rem .8rem; border-radius: .375rem; background: #fff; }
+.redirect-example code { overflow-wrap: anywhere; color: #9a3412; }

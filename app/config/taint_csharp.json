@@ -38,12 +38,15 @@
     ],
     "sink_sanitizers": {
         "path": [
-            "Path.GetFileName"
+            "Path.GetFileName",
+            "Path.GetFileNameWithoutExtension"
         ],
         "html": [
             "HttpUtility.HtmlEncode",
             "WebUtility.HtmlEncode",
-            "HtmlEncoder.Default.Encode"
+            "HtmlEncoder.Default.Encode",
+            "HttpUtility.HtmlAttributeEncode",
+            "AntiXssEncoder.HtmlEncode"
         ],
         "url": [],
         "sql": [],

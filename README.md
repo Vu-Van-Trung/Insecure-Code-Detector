@@ -10,8 +10,8 @@ Mã nguồn được phân tích **chỉ dưới dạng text/cây cú pháp**: k
 | Ngôn ngữ | Đuôi file | Parser | Rule |
 |---|---|---|---|
 | Python | `.py` | `ast` (thư viện chuẩn) | PY001–PY018 |
-| Java | `.java` | tree-sitter-java | JV001–JV009 |
-| C# | `.cs` | tree-sitter-c-sharp | CS001–CS009 |
+| Java | `.java` | tree-sitter-java | JV001–JV012 |
+| C# | `.cs` | tree-sitter-c-sharp | CS001–CS012 |
 | PHP | `.php` | tree-sitter-php | PH001–PH013 |
 
 **Thử ngay trong 1 phút** với bộ mẫu demo đi kèm (xem [mục 5](#5-chạy-thử-với-mẫu-demo)):
@@ -37,7 +37,7 @@ Không dùng AI/LLM để quyết định finding; không dùng Bandit/Semgrep/S
 
 ## 2. Tính năng
 
-- **49 security rules**: 18 cho Python, 9 cho Java, 9 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
+- **55 security rules**: 18 cho Python, 12 cho Java, 12 cho C#, 13 cho PHP; mỗi rule có severity, confidence, CWE, recommendation.
 - **AST analysis**: nhận diện `Call`, `Name`, `Attribute`, `Assign`, `Constant`, `BinOp`, `JoinedStr`,
   `Import`, `ImportFrom`, keyword arguments; giải quyết alias (`import subprocess as sp` → `subprocess.run`).
 - **Taint tracking** (hỗ trợ inter-procedural trong file/class) cho cả 4 ngôn ngữ: `SOURCE → biến → biến → SINK`, hiển thị taint path
@@ -126,7 +126,11 @@ SecurityRule                      metadata, create_finding, tainted/sanitized/gr
     ├── CodeInjectionRuleBase     JV004, CS004
     ├── WeakAlgorithmRuleBase     JV005, JV006, CS005, CS006
     ├── InsecureRandomRuleBase    JV007, CS007   (+ InsecureRandomMixin, dùng chung với PY009)
-    └── HardcodedSecretRuleBase   JV008, CS008   (+ HardcodedSecretMixin, dùng chung với PY007)
+    ├── HardcodedSecretRuleBase   JV008, CS008   (+ HardcodedSecretMixin, dùng chung với PY007)
+    ├── OpenRedirectRuleBase      JV010, CS010
+    └── TaintedSinkRuleBase       chỉ báo khi tainted, có sanitizer theo loại sink (bản Java/C# của TaintedSinkRule)
+        ├── PathTraversalRuleBase JV011, CS011: chỉ khai báo bảng path_sinks
+        └── JV012, CS012          XSS
 ```
 
 **Thêm rule mới (ví dụ PY019)**: tạo `app/rules/xxx_rule.py` chứa lớp kế thừa một lớp cơ sở ở trên và gắn
@@ -210,10 +214,8 @@ Kết quả:
 | | C# | 5 (2 CRITICAL, 2 HIGH, 1 MEDIUM) | 0 |
 | | Java | 5 (2 CRITICAL, 2 HIGH, 1 MEDIUM) | 0 |
 | Mẫu 2 — Quản lý tệp | Python | 3 (1 CRITICAL, 2 HIGH) | 0 |
-| | C# | 1 (1 CRITICAL) | 0 |
-| | Java | 1 (1 CRITICAL) | 0 |
-
-Ở Mẫu 2, lỗi Path Traversal của bản C#/Java không được báo (xem [Hạn chế](#14-hạn-chế)).
+| | C# | 3 (1 CRITICAL, 2 HIGH) | 0 |
+| | Java | 3 (1 CRITICAL, 2 HIGH) | 0 |
 
 ### 5.2. Output mẫu
 
@@ -263,7 +265,8 @@ Công cụ nhận ra cùng một luồng dữ liệu trên cả ba ngôn ngữ:
 | SQLi — đăng nhập (CWE-89) | PY011 `request.form -> username -> query -> .execute()` | CS002 `[FromForm] -> username -> sql -> new SqliteCommand()` | JV002 `@RequestParam -> username -> sql -> Statement.executeQuery()` |
 | SQLi — tìm kiếm (CWE-89) | PY011 `request.args -> keyword -> query -> .execute()` | CS002 `[FromQuery] -> q -> cmd.CommandText` | JV002 `@RequestParam -> q -> sql -> Statement.executeQuery()` |
 | Weak Crypto (CWE-328) | PY008 `hashlib.md5(password)` | CS005 `MD5.Create()` | JV005 `MessageDigest.getInstance("MD5")` |
-| Path Traversal (CWE-22) | PY014 `request.args -> name -> path -> open()`, `flask.send_file()` | *không báo* | *không báo* |
+| Path Traversal — xem tệp (CWE-22) | PY014 `request.args -> name -> path -> open()` | CS011 `[FromQuery] -> name -> path -> File.ReadAllText()` | JV011 `@RequestParam -> name -> path -> Files.readString()` |
+| Path Traversal — tải tệp (CWE-22) | PY014 `request.args -> name -> flask.send_file()` | CS011 `[FromQuery] -> name -> path -> PhysicalFile()` | JV011 `@RequestParam -> name -> path -> new FileSystemResource()` |
 | Command Injection (CWE-78) | PY004 `request.args -> name -> path -> command -> subprocess.run()` | CS001 `[FromQuery] -> name -> path -> arguments -> ProcessStartInfo` | JV001 `@RequestParam -> name -> path -> command -> ProcessBuilder` |
 
 ### 5.4. Vì sao bản `fixed` không còn cảnh báo
@@ -404,7 +407,7 @@ Xem đầy đủ bằng `python main.py rules`.
 ### Java và C#
 
 Hai ngôn ngữ dùng cùng một bộ logic (`_ts_common.py`) và cách chấm điểm giống Python:
-tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, hằng số → LOW hoặc không báo,
+severity tùy từng rule; nguồn tainted tới sink nguy hiểm thường là CRITICAL, open redirect là HIGH,
 đi qua sanitizer → LOW.
 
 | CWE | Java | C# | Ghi chú |
@@ -418,6 +421,30 @@ tainted → CRITICAL, tham số/kết quả hàm không rõ nguồn → HIGH, h�
 | CWE-330 | **JV007** `java.util.Random`, `Math.random` cho token/otp... | **CS007** `System.Random` cho token/otp... | `SecureRandom`, `RandomNumberGenerator` → không báo |
 | CWE-798 | **JV008** secret theo tên + entropy, key đã biết, `password=` trong JDBC URL | **CS008** như Java + `Password=` trong connection string, property initializer | giá trị bị che |
 | CWE-295 | **JV009** TrustManager rỗng, `verify()` luôn `true`, `NoopHostnameVerifier` | **CS009** callback trả `true`, `DangerousAcceptAnyServerCertificateValidator` | |
+| CWE-601 | **JV010** `sendRedirect`, Spring `RedirectView` nhận URL từ request | **CS010** ASP.NET `Response.Redirect`/`Redirect` nhận URL từ request | Input không tin cậy → HIGH; ưu tiên route cố định, allow-list host hoặc `LocalRedirect` |
+| CWE-22 | **JV011** `new FileInputStream/FileReader/FileWriter...`, `Files.readAllBytes/write/delete...` (NIO), Commons IO `FileUtils.*`, `file.delete()`, `MultipartFile.transferTo` | **CS011** `File.ReadAllText/WriteAllText/Delete/Copy...`, `Directory.*`, `new FileStream`, `FileInfo.Delete/OpenRead...`, `PhysicalFile` | chỉ báo khi tainted → HIGH; `FilenameUtils.getName`, `new File(x).getName()`, `Path.GetFileName` → không báo |
+| CWE-79 | **JV012** `response.getWriter()/getOutputStream()` `.print/println/write...`; handler `@GetMapping`... trả về chuỗi HTML ghép từ request | **CS012** `Response.Write/WriteAsync`, `new HtmlString`, `MvcHtmlString.Create`, `Html.Raw`, `Content(x, "text/html")`, `ContentResult` HTML | chỉ báo khi tainted → HIGH; `HtmlUtils.htmlEscape`, `Encode.forHtml`, `WebUtility.HtmlEncode`, `HtmlEncoder.Default.Encode` → không báo |
+
+Chi tiết `JV010`/`CS010` giải thích luồng nguồn → đích, có ví dụ URL bị lợi dụng và khuyến nghị theo ngôn ngữ. Với C#,
+`Response.Redirect(destination)` trong nhánh đã kiểm tra chính xác `Url.IsLocalUrl(destination)` được coi là nội bộ;
+`LocalRedirect` cũng không bị báo. Các kiểm tra allow-list do dự án tự viết cần được khai báo rõ trong `sink_sanitizers.url`.
+
+`JV011`/`CS011` và `JV012`/`CS012` giống PY014/PY018 của Python: đường dẫn file và nội dung response có mặt ở khắp
+nơi, nên **chỉ luồng đi từ source** (`@RequestParam`, `request.getParameter()`, `[FromQuery]`, `Request.Query`...)
+mới được báo; tham số không rõ nguồn hay hằng số thì không. Bản thân `new File(x)` / `new FileInfo(x)` không phải
+sink (chưa mở file), nhờ đó mẫu `new File(name).getName()` trong bản `fixed` của Mẫu 2 không bị báo.
+`new StreamReader(...)` cũng không phải sink vì thường nhận một stream (`new StreamReader(Request.Body)`).
+`PrintWriter` chỉ là sink XSS khi lấy từ `response.getWriter()`; `Content(text)` không có Content-Type HTML là
+text/plain nên không báo.
+
+Ví dụ từ bản `vulnerable` của Mẫu 2:
+
+```text
+[HIGH] CS011 Mau_Demo/Mau2_QuanLyTep/csharp/vulnerable/Controllers/FileController.cs:46:26 - Untrusted input from [FromQuery] is used as a file path in File.ReadAllText(). (CWE-22, confidence 95%)
+    Taint path: [FromQuery] -> name -> path -> File.ReadAllText()
+[HIGH] JV011 Mau_Demo/Mau2_QuanLyTep/java/vulnerable/src/main/java/demo/filemanager/FileController.java:71:28 - Untrusted input from @RequestParam is used as a file path in new FileSystemResource(). (CWE-22, confidence 95%)
+    Taint path: @RequestParam -> name -> path -> new FileSystemResource()
+```
 
 ### PHP
 
@@ -566,7 +593,8 @@ def file_info():
 
 Với Java/C#, source gồm lời gọi (`request.getParameter()`, `Console.ReadLine()`, `System.getenv()`),
 thành viên (`Request.Query`, `Request.Form`), **tham số có annotation/attribute** (`@RequestParam`,
-`@PathVariable`, `[FromQuery]`, `[FromBody]`...) và `args` của `main`. Sanitizer mặc định:
+`@PathVariable`, `@RequestPart`, `[FromQuery]`, `[FromBody]`...), tên file upload
+(`MultipartFile.getOriginalFilename()`) và `args` của `main`. Sanitizer mặc định:
 `Integer.parseInt`, `int.Parse`, `Guid.Parse`... Cùng luồng dữ liệu ở bản C# và Java của Mẫu 2:
 
 ```text
@@ -578,6 +606,28 @@ thành viên (`Request.Query`, `Request.Form`), **tham số có annotation/attri
     Source: @RequestParam  Sink: ProcessBuilder
     Taint path: @RequestParam -> name -> path -> command -> ProcessBuilder
 ```
+
+Sanitizer theo loại sink (`sink_sanitizers`) cho Java/C#:
+
+| Loại sink | Java | C# | Rule dùng |
+|---|---|---|---|
+| `path` | `FilenameUtils.getName/getBaseName`, `File.getName`, `Path.getFileName` | `Path.GetFileName`, `Path.GetFileNameWithoutExtension` | JV011, CS011 |
+| `html` | `HtmlUtils.htmlEscape`, `StringEscapeUtils.escapeHtml4`, `Encode.forHtml*`, `ESAPI.encoder().encodeForHTML` | `HttpUtility.HtmlEncode`, `WebUtility.HtmlEncode`, `HtmlEncoder.Default.Encode`, `AntiXssEncoder.HtmlEncode` | JV012, CS012 |
+| `url` | (helper allow-list của dự án) | (helper allow-list của dự án) | JV010, CS010 |
+| `sql`, `command` | `ESAPI.encoder().encodeForSQL` | — | JV001/JV002, CS001/CS002 (vẫn báo LOW) |
+
+Sanitizer chỉ làm sạch cho đúng loại sink của nó: `File.getName(x)` an toàn cho JV011 nhưng
+`new ProcessBuilder("cmd.exe", "/c", "dir " + name)` vẫn CRITICAL; `HtmlUtils.htmlEscape(x)` không làm sạch câu SQL.
+
+Có thể cấu hình `sink_sanitizers.url` trong file taint tương ứng để khai báo helper của dự án mà
+**trả về URL đã xác thực theo allow-list**. Ghép mục này vào cấu hình hiện có, giữ nguyên sources và sanitizer khác:
+
+```json
+"url": ["RedirectPolicy.onlyAllowed"]
+```
+
+Khi helper nhận input tainted và trả giá trị đã kiểm tra, luồng được đánh dấu an toàn cho redirect. Chỉ khai báo
+helper thực hiện allow-list; mã hóa URL hoặc kiểm tra cú pháp đơn thuần không ngăn chuyển hướng tới máy chủ ngoài.
 
 Với PHP, source là `$_GET`, `$_POST`, `$_REQUEST`, `$_COOKIE`, `$_FILES`, `$_SERVER` (`app/config/taint_php.json`).
 Sanitizer: `intval`, `(int)`, `htmlspecialchars`, `mysqli_real_escape_string`, `escapeshellarg`, `basename`...
@@ -660,9 +710,6 @@ Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/e
 
 ## 14. Hạn chế
 
-- **Chưa có rule Path Traversal cho Java và C#** (chỉ có PY014 cho Python, PH005 cho PHP). Ví dụ trong
-  Mẫu 2: `File.ReadAllText(Path.Combine(dir, name))` (C#) và `Files.readString(dir.resolve(name))` (Java)
-  vẫn khai thác được bằng `../secret/config.txt` nhưng không bị báo (false negative).
 - **Phân tích liên hàm xuyên file/module**: Đã hỗ trợ phân tích liên hàm (inter-procedural) trong cùng một file/class (lan truyền taint qua tham số hàm gọi và giá trị trả về của hàm helper); tuy nhiên chưa phân tích đồ thị gọi (call graph) xuyên qua nhiều file/module khác nhau.
 - Nhánh điều kiện được hợp nhất bảo thủ; không phân tích đường đi (path-sensitive).
 - Container được theo dõi như một khối (`d["a"] = tainted` → cả `d` bị taint).
@@ -677,6 +724,11 @@ Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/e
 - Java/C#: không phân giải kiểu đầy đủ như trình biên dịch (không đọc `import`/`using` hay thư viện);
   kiểu của biến được suy từ khai báo và `new T()`, nên đối tượng truyền qua nhiều lớp có thể bị bỏ sót.
   Không phân tích lambda, generic phức tạp, LINQ, annotation cấu hình (Spring Security...).
+- JV011/CS011 chỉ báo khi chứng minh được dữ liệu đến từ source; kiểm tra kiểu
+  `base.resolve(name).normalize().startsWith(base)` / `GetFullPath(...).StartsWith(baseDir)` không được nhận diện là
+  sanitizer — dùng `// analyzer-ignore: JV011` sau khi review. `Files.copy` chỉ xét đường dẫn đích.
+- JV012/CS012 không đọc template (JSP, Thymeleaf `th:utext`, Razor `.cshtml` với `@Html.Raw`); handler Spring chỉ bị
+  báo khi giá trị trả về chứa thẻ HTML cố định trong code (`"<h1>" + name`), không báo `return name;`.
 - Java/C#/PHP yêu cầu UTF-8; file có lỗi cú pháp không được phân tích (báo *Scan failed*).
 - PHP: không theo dõi dữ liệu qua `include` giữa các file (vd gán `$file = $_GET['page']` ở `page.php`
   rồi `include($file)` ở `index.php`: chỉ báo MEDIUM), không theo dõi `$_SESSION` và dữ liệu đọc từ database
@@ -686,8 +738,7 @@ Tham khảo [điều kiện upload SARIF của GitHub](https://docs.github.com/e
 
 ## 15. Hướng phát triển
 
-- Thêm rule Path Traversal cho Java/C# (`File.ReadAllText`, `PhysicalFile`, `Files.readString`,
-  `FileSystemResource`...) với sanitizer `Path.GetFileName` / `File.getName` — đúng trường hợp Mẫu 2 đang bỏ sót.
+- Thêm rule SSRF cho Java/C#.
 - Phân tích liên hàm xuyên các module và package lớn (inter-module call graph), phân tích path-sensitive.
 - Thêm ngôn ngữ khác qua tree-sitter (JavaScript/TypeScript, Go): chỉ cần một adapter và bộ rule mới.
 - Phân giải kiểu Java/C# đầy đủ hơn (đọc `import`/`using`, kiểu trả về của method).
@@ -728,8 +779,8 @@ coi là sanitizer chống SSRF. Chuẩn hóa đường dẫn cũng không chứn
 nằm trong thư mục cho phép. `Codec.encode` và `SqlParameter` không được coi là
 sanitizer cho chuỗi SQL ghép nối. Tham số hóa SQL phải truyền giá trị tách khỏi query.
 
-Các danh mục HTML/path của Java/C# lưu metadata taint cho cấu hình mở rộng;
-bộ rule Java/C# hiện tại chưa có sink XSS/path/SSRF tương ứng.
+Danh mục `path` và `html` của Java/C# được dùng bởi JV011/CS011 (path traversal) và JV012/CS012 (XSS):
+dữ liệu đã qua sanitizer đúng loại không bị báo. Java/C# chưa có rule SSRF.
 
 ### CSRF cho Web UI
 

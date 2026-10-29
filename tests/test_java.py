@@ -1,4 +1,4 @@
-"""Java rules JV001 - JV009 and Java taint tracking (tree-sitter)."""
+"""Java rules JV001 - JV012 and Java taint tracking (tree-sitter)."""
 
 import textwrap
 
@@ -248,6 +248,26 @@ def test_comment_and_string_are_not_code(java):
     assert java(code, "JV001") == []
 
 
+# ---------------------------------------------------------------- JV010 open redirect
+
+
+def test_open_redirect_from_request_parameter(java):
+    [finding] = java('response.sendRedirect(request.getParameter("next"));', "JV010")
+    assert finding.cwe == "CWE-601"
+    assert finding.severity is Severity.HIGH
+    assert finding.source == "request.getParameter()"
+    assert finding.sink == "response.sendRedirect()"
+
+
+def test_open_redirect_tracks_assigned_request_value(java):
+    findings = java('String target = request.getParameter("next");\nresponse.sendRedirect(target);', "JV010")
+    assert len(findings) == 1 and findings[0].line == 4
+
+
+def test_fixed_redirect_target_is_not_reported(java):
+    assert java('response.sendRedirect("/dashboard");', "JV010") == []
+
+
 def test_generic_encoder_does_not_sanitize_sql(java):
     code = """
     String id = request.getParameter("id");
@@ -276,3 +296,120 @@ def test_inter_procedural_call_in_java(java):
     assert len(findings) == 1
     assert findings[0].severity is Severity.CRITICAL
     assert findings[0].source == "req.getParameter()"
+
+
+# ---------------------------------------------------------------- JV011 path traversal
+
+
+@pytest.mark.parametrize(
+    "code, sink",
+    [
+        ('String n = request.getParameter("f");\nnew FileInputStream("/data/" + n);', "new FileInputStream()"),
+        ('Files.readAllBytes(Paths.get("/data", request.getParameter("f")));', "Files.readAllBytes()"),
+        ('java.nio.file.Files.delete(base.resolve(request.getParameter("f")));', "Files.delete()"),
+        ('File f = new File("/up", request.getParameter("f"));\nf.delete();', "File.delete()"),
+        ('FileUtils.readFileToString(new File(request.getParameter("f")), "UTF-8");', "FileUtils.readFileToString()"),
+    ],
+)
+def test_path_traversal_from_request(java, code, sink):
+    [finding] = java(code, "JV011")
+    assert (finding.severity, finding.cwe) == (Severity.HIGH, "CWE-22")
+    assert finding.taint_path[0] == "request.getParameter()" and finding.sink == sink
+
+
+def test_path_traversal_upload_file_name(java):
+    code = ('class C { @PostMapping("/u") void u(@RequestParam("file") MultipartFile file) throws Exception {\n'
+            '  file.transferTo(new File("/uploads", file.getOriginalFilename())); } }')
+    [finding] = java(code, "JV011", wrap=False)
+    assert finding.sink == "MultipartFile.transferTo()"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'new FileInputStream("/data/" + param);',                               # origin unknown
+        'new FileInputStream("/data/report.txt");',
+        'String n = FilenameUtils.getName(request.getParameter("f"));\nnew FileInputStream("/data/" + n);',
+        'String n = new File(request.getParameter("f")).getName();\nFiles.readString(Paths.get("/data", n));',
+        'File f = new File(request.getParameter("f"));',                        # no file access yet
+        'Files.copy(request.getInputStream(), Paths.get("/tmp/upload.bin"));',  # stream, not a path
+    ],
+)
+def test_path_traversal_safe(java, code):
+    assert java(code, "JV011") == []
+
+
+def test_path_sanitizer_only_cleans_paths(java):
+    code = 'String n = FilenameUtils.getName(request.getParameter("f"));\nRuntime.getRuntime().exec("cat " + n);'
+    assert java(code, "JV011") == []
+    [finding] = java(code, "JV001")
+    assert finding.severity is Severity.CRITICAL
+
+
+def test_path_with_generic_sanitizer_is_low(java):
+    [finding] = java('int id = Integer.parseInt(request.getParameter("id"));\nnew FileReader("/data/" + id);', "JV011")
+    assert finding.severity is Severity.LOW
+
+
+# ---------------------------------------------------------------- JV012 XSS
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'response.getWriter().println("<p>" + request.getParameter("q") + "</p>");',
+        'PrintWriter out = response.getWriter();\nout.print(request.getParameter("q"));',
+        'response.getOutputStream().print(request.getParameter("q"));',
+    ],
+)
+def test_xss_servlet_writer(java, code):
+    [finding] = java(code, "JV012")
+    assert (finding.severity, finding.cwe) == (Severity.HIGH, "CWE-79")
+    assert finding.source == "request.getParameter()"
+
+
+def test_xss_spring_handler_returning_html(java):
+    code = """
+    @RestController class C {
+        @GetMapping("/a") String a(@RequestParam String name) { return "<h1>Hello " + name + "</h1>"; }
+        @GetMapping("/b") String b(@RequestParam String name) { String html = "<b>" + name; return html; }
+        @GetMapping("/c") String c(@RequestParam String name) { return "<b>" + HtmlUtils.htmlEscape(name) + "</b>"; }
+        @GetMapping("/d") String d(@RequestParam String tab) { return "redirect:/profile/" + tab; }
+        String helper(String name) { return "<i>" + name + "</i>"; }
+    }
+    """
+    findings = java(code, "JV012", wrap=False)
+    assert [f.sink for f in findings] == ["a()", "b()"]
+    assert "returned by the request handler a()" in findings[0].message
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'response.getWriter().println(HtmlUtils.htmlEscape(request.getParameter("q")));',
+        'response.getWriter().println(Encode.forHtml(request.getParameter("q")));',
+        'response.getWriter().println("<p>" + param + "</p>");',                 # origin unknown
+        'PrintWriter log = new PrintWriter(new FileWriter("/var/log/a"));\nlog.println(request.getParameter("q"));',
+        'System.out.println(request.getParameter("q"));',
+    ],
+)
+def test_xss_safe(java, code):
+    assert java(code, "JV012") == []
+
+
+def test_html_sanitizer_does_not_clean_sql(java):
+    code = ('String q = HtmlUtils.htmlEscape(request.getParameter("q"));\n'
+            'conn.createStatement().executeQuery("SELECT * FROM t WHERE n = \'" + q + "\'");')
+    [finding] = java(code, "JV002")
+    assert finding.severity is Severity.CRITICAL
+
+
+def test_path_traversal_through_local_method(java):
+    code = """
+    class C {
+        void handle(HttpServletRequest request) throws Exception { read(request.getParameter("f")); }
+        void read(String name) throws Exception { new FileInputStream("/data/" + name); }
+    }
+    """
+    [finding] = java(code, "JV011", wrap=False)
+    assert finding.source == "request.getParameter()" and finding.line == 4

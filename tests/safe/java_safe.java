@@ -35,4 +35,26 @@ public class UserService {
     public int rollDice() {
         return new Random().nextInt(6) + 1;
     }
+
+    public void download(HttpServletRequest request, javax.servlet.http.HttpServletResponse response) throws Exception {
+        String name = org.apache.commons.io.FilenameUtils.getName(request.getParameter("file"));
+        byte[] data = java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("/srv/files", name));
+        String other = new java.io.File(request.getParameter("other")).getName();
+        new java.io.File("/srv/uploads", other).delete();
+
+        String query = request.getParameter("q");
+        response.getWriter().println("<p>Results for " + HtmlUtils.htmlEscape(query) + "</p>");
+        java.io.PrintWriter log = new java.io.PrintWriter(new java.io.FileWriter("/var/log/app.log"));
+        log.println("search: " + HtmlUtils.htmlEscape(query));
+    }
+
+    @GetMapping("/hello")
+    public String hello(@RequestParam("name") String name) {
+        return "<h1>Hello " + Encode.forHtml(name) + "</h1>";
+    }
+
+    @GetMapping("/profile")
+    public String profile(@RequestParam("tab") String tab) {
+        return "profile/" + tab;
+    }
 }

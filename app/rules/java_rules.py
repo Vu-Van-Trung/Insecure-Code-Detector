@@ -1,4 +1,4 @@
-"""Rule Java JV001 - JV009 (dựa trên tree-sitter).
+"""Rule Java JV001 - JV012 (dựa trên tree-sitter).
 
 Mỗi rule kế thừa một lớp cơ sở trong _ts_common.py (logic dùng chung với C#);
 phần lớn chỉ khai báo tên API đặc trưng của Java.
@@ -10,6 +10,7 @@ import re
 from collections.abc import Iterator
 
 from app.analyzer.languages import JAVA
+from app.analyzer.ts.adapters import normalize
 from app.analyzer.ts.context import TSContext
 from app.models.finding import Finding, Severity
 from app.rules._ts_common import (
@@ -18,9 +19,14 @@ from app.rules._ts_common import (
     DeserializationRuleBase,
     HardcodedSecretRuleBase,
     InsecureRandomRuleBase,
+    RECEIVER,
+    OpenRedirectRuleBase,
+    PathTraversalRuleBase,
     SqlRuleBase,
+    TaintedSinkRuleBase,
     TSRule,
     WeakAlgorithmRuleBase,
+    builds_html,
     flatten_command,
 )
 from app.rules.registry import register_rule
@@ -284,3 +290,152 @@ class JavaTlsValidationRule(TSRule):
                     or self._ALLOW_ALL.search(adapter.text(argument)):
                 yield self.create_finding(call.node, ctx, f"{call.display} disables hostname verification.",
                                           confidence=0.9)
+
+
+@register_rule
+class JavaOpenRedirectRule(OpenRedirectRuleBase):
+    """JV010: HttpServletResponse.sendRedirect / Spring RedirectView."""
+
+    id = "JV010"
+    language = JAVA
+    name = "Open redirect"
+    description = (
+        "A redirect destination taken from an untrusted request value can send users to an attacker-controlled "
+        "site for phishing or to bypass trust in the application domain."
+    )
+    recommendation = (
+        "Prefer redirects to fixed local routes. If a destination must be configurable, validate it against an "
+        "allow-list of trusted hosts or route identifiers before redirecting."
+    )
+
+    def check_file(self, ctx: TSContext) -> Iterator[Finding]:
+        for call in ctx.calls:
+            # sendRedirect is the servlet response API; RedirectView is Spring MVC's redirect sink.
+            if call.method == "sendRedirect" or (call.is_constructor and call.method == "RedirectView"):
+                finding = self.report_redirect(call, ctx)
+                if finding is not None:
+                    yield finding
+
+
+# Lời gọi thật sự đọc/ghi/xóa file -> vị trí argument là đường dẫn (RECEIVER = đối tượng File).
+# java.nio.file.Files nhận Path: Paths.get(dir, name) / base.resolve(name) giữ nguyên taint của name.
+_JAVA_PATH_SINKS: dict[str, tuple[int, ...]] = {
+    **{f"new {cls}": (0,) for cls in ("FileInputStream", "FileOutputStream", "FileReader", "FileWriter",
+                                       "RandomAccessFile", "FileSystemResource")},
+    **{f"Files.{method}": (0,) for method in (
+        "readAllBytes", "readAllLines", "readString", "lines", "newInputStream", "newOutputStream",
+        "newBufferedReader", "newBufferedWriter", "write", "writeString", "delete", "deleteIfExists",
+        "createFile", "createDirectory", "createDirectories", "list", "walk", "newByteChannel")},
+    # Files.copy(InputStream, Path): argument đầu có thể là stream của request (không phải đường dẫn).
+    "Files.copy": (1,),
+    "Files.move": (0, 1),
+    **{f"FileUtils.{method}": (0,) for method in (
+        "readFileToString", "readFileToByteArray", "readLines", "openInputStream", "openOutputStream",
+        "writeStringToFile", "writeByteArrayToFile", "write", "forceDelete", "deleteQuietly",
+        "deleteDirectory")},
+    "FileUtils.copyFile": (0, 1),
+    "FileUtils.moveFile": (0, 1),
+    "ResourceUtils.getFile": (0,),
+    **{f"File.{method}": (RECEIVER,) for method in (
+        "delete", "createNewFile", "mkdir", "mkdirs", "listFiles", "list", "setWritable", "setExecutable")},
+    "File.renameTo": (RECEIVER, 0),
+    # Spring: lưu file upload, vd file.transferTo(new File(dir, file.getOriginalFilename())).
+    "MultipartFile.transferTo": (0,),
+    "Part.write": (0,),
+}
+
+
+@register_rule
+class JavaPathTraversalRule(PathTraversalRuleBase):
+    """JV011: FileInputStream, java.nio.file.Files, Commons IO, File.delete()... với đường dẫn từ request."""
+
+    id = "JV011"
+    language = JAVA
+    recommendation = (
+        "Keep only the file name with FilenameUtils.getName() / new File(name).getName(), or resolve the path "
+        "and verify it stays in the base directory: base.resolve(name).normalize().startsWith(base). "
+        "Prefer server-generated file names for uploads."
+    )
+    path_sinks = _JAVA_PATH_SINKS
+
+
+# Method của PrintWriter / ServletOutputStream ghi nội dung vào HTTP response.
+_WRITER_METHODS = frozenset({"write", "print", "println", "printf", "format", "append"})
+# Biểu thức cho ra writer của response: response.getWriter(), response.getOutputStream().
+_RESPONSE_WRITERS = ("getWriter()", "getOutputStream()")
+# Annotation của method xử lý request trong Spring MVC: giá trị return là nội dung trả về
+# (với @RestController / @ResponseBody) hoặc tên view (không chứa thẻ HTML).
+_HANDLER_ANNOTATION = re.compile(r"@(Get|Post|Put|Patch|Delete|Request)Mapping\b")
+
+
+@register_rule
+class JavaXssRule(TaintedSinkRuleBase):
+    """JV012: dữ liệu request được ghi thẳng vào HTML response (servlet writer, @ResponseBody)."""
+
+    id = "JV012"
+    language = JAVA
+    name = "Cross-site scripting (XSS)"
+    description = (
+        "Untrusted input is written into the HTML response without encoding, so an attacker can inject "
+        "<script> or event-handler attributes that run in the victim's browser."
+    )
+    severity = Severity.HIGH
+    cwe = "CWE-79"
+    category = "Cross-Site Scripting"
+    recommendation = (
+        "Encode every value for its HTML context at output time (OWASP Encoder Encode.forHtml(), Spring "
+        "HtmlUtils.htmlEscape()), or render through a template engine with auto-escaping (Thymeleaf th:text)."
+    )
+    sanitizer_category = "html"
+    tainted_message = "Untrusted input from {source} is written to the HTML response by {sink}."
+
+    def check_file(self, ctx: TSContext) -> Iterator[Finding]:
+        # 1) response.getWriter().println(x), out.print(x) với PrintWriter out = response.getWriter().
+        for call in ctx.calls:
+            if call.is_constructor or call.method not in _WRITER_METHODS or not call.args \
+                    or not self._is_response_writer(ctx, call.receiver):
+                continue
+            finding = self.grade_sink(call.node, ctx, call.args, f"{normalize(call.receiver_text or '')}.{call.method}()")
+            if finding is not None:
+                yield finding
+        # 2) Handler Spring trả về chuỗi HTML ghép từ dữ liệu request: return "<h1>" + name + "</h1>";
+        for method in ctx.methods:
+            modifiers = next((c for c in method.node.named_children if c.type == "modifiers"), None)
+            if method.body is None or modifiers is None \
+                    or not _HANDLER_ANNOTATION.search(ctx.adapter.text(modifiers)):
+                continue
+            for node in self._returns(ctx, method.body):
+                value = next((c for c in node.named_children if c.type not in ctx.adapter.comment_types), None)
+                if value is None or not builds_html(ctx, value, node):
+                    continue
+                finding = self.grade_sink(node, ctx, [value], f"{method.name}()", confidence=0.85,
+                                          message="HTML built from untrusted input ({source}) is returned by "
+                                                  "the request handler {sink}.")
+                if finding is not None:
+                    yield finding
+
+    @staticmethod
+    def _is_response_writer(ctx: TSContext, receiver) -> bool:  # type: ignore[no-untyped-def]
+        """True nếu đối tượng nhận là writer của HTTP response (không phải PrintWriter ghi ra file)."""
+        if receiver is None:
+            return False
+        receiver = ctx.adapter.unwrap(receiver)
+        if normalize(ctx.adapter.text(receiver)).endswith(_RESPONSE_WRITERS):
+            return True
+        if receiver.type != "identifier":
+            return False
+        initial = ctx.initializer_of(ctx.adapter.text(receiver), receiver)
+        return initial is not None and normalize(ctx.adapter.text(initial)).endswith(_RESPONSE_WRITERS)
+
+    @staticmethod
+    def _returns(ctx: TSContext, body) -> Iterator:  # type: ignore[no-untyped-def]
+        """Các câu lệnh return của method (không đi vào lambda hay class lồng bên trong)."""
+        stack = [body]
+        while stack:
+            node = stack.pop()
+            if node.type == "return_statement":
+                yield node
+                continue
+            if node.type in ctx.adapter.lambda_types or node.type in ctx.adapter.class_types:
+                continue
+            stack.extend(node.named_children)
